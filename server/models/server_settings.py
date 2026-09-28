@@ -17,11 +17,16 @@ class ServerSettings:
     last_subscription_refresh: datetime | None = None
     # Checks run against every outbound server; aliases are unique.
     outbound_tests: tuple[OutboundTest, ...] = ()
+    # The server keeps the best server by rating connected (handlers/core.py,
+    # connect_best_outbound_server). Turned off when a client connects a server itself.
+    auto_connect: bool = False
 
     def __post_init__(self):
         interval = self.subscription_refresh_interval
         if type(interval) is not int or interval <= 0:
             raise ValueError("Subscription refresh interval must be a positive number of seconds")
+        if type(self.auto_connect) is not bool:
+            raise ValueError("Auto connect must be true or false")
         refreshed = self.last_subscription_refresh
         if refreshed is not None:
             if refreshed.utcoffset() is None:

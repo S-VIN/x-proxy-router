@@ -22,7 +22,7 @@ from apscheduler.triggers.base import BaseTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .cores.mihomo.mihomo_client import MihomoClient
-from .handlers.core import register_outbound_servers
+from .handlers.core import connect_best_outbound_server, register_outbound_servers
 from .handlers.init import init
 from .handlers.outbound_test import test_outbound_servers
 from .handlers.reg_filter import add_reg_filter, delete_reg_filter
@@ -445,6 +445,7 @@ async def application() -> AsyncIterator[ApplicationContext]:
 
     The core is started and the stored servers are registered in it before the
     application is ready; if the core cannot start, the application does not start.
+    With auto_connect on, the best stored server is connected then as well.
     """
     with SettingsStore() as settings:
         core_client = MihomoClient()
@@ -463,6 +464,7 @@ async def application() -> AsyncIterator[ApplicationContext]:
             scheduler.start()
             await core_client.service_start(PROXY_PORT, TEST_PORT)
             await register_outbound_servers(context)
+            await connect_best_outbound_server(context)
             await websocket.start(WEBSOCKET_HOST, WEBSOCKET_PORT, static_dir=WEB_CLIENT_DIR)
             init_task = asyncio.create_task(init(context), name="application-init")
             yield context

@@ -1,6 +1,7 @@
 """Keep the core in line with the database: registered servers and the connected one."""
 
 import logging
+from dataclasses import replace
 
 from ..models.application_context import ApplicationContext
 from ..models.outbound_server import OutboundServer
@@ -58,13 +59,15 @@ async def register_outbound_servers(context: ApplicationContext) -> None:
 async def connect_outbound_server(
     context: ApplicationContext, server_id: str
 ) -> OutboundServer | None:
-    """Route the core's main traffic through the stored server and remember it.
+    """Route the core's main traffic through the server a client chose, and remember it.
 
-    The server gets is_connected, the previously connected one loses it, and
-    clients are notified. Returns the server, or None if it is not stored.
+    The server gets is_connected, the previously connected one loses it. The
+    choice turns ServerSettings.auto_connect off, so the server no longer
+    switches by itself; clients get server_settings, then outbound_server.
+    Returns the server, or None if it is not stored.
     Raises ServerFiltered for a filtered server, and CoreError if the core cannot
     switch, e.g. the server was not registered because the core does not support
-    its parameters; the previous connection is then kept.
+    its parameters; the previous connection and auto_connect are then kept.
     """
     async with context.core_lock:
         server = context.settings.outbound_server.get_by_id(server_id)
@@ -72,11 +75,63 @@ async def connect_outbound_server(
             return None
         if server.filtered is not None:
             raise ServerFiltered(f"Server {server_id} is filtered: {server.filtered}")
-        try:
-            await context.core_client.outbound_connect(server_id)
-        except Exception as error:
-            log.exception("Failed to connect server %s", server_id)
-            raise CoreError("The core could not connect to the server") from error
-        server = context.settings.outbound_server.set_connected(server_id)
+        server = await _switch(context, server_id)
+        # Under the lock, so auto_connect cannot replace the chosen server meanwhile.
+        settings = context.settings.server_settings.get()
+        if settings.auto_connect:
+            context.settings.server_settings.save(replace(settings, auto_connect=False))
+    await context.sync.notify("server_settings")
     await context.sync.notify("outbound_server")
     return server
+
+
+def _rating(server: OutboundServer) -> int:
+    """Rating for choosing a server: an unchecked one (None) counts as 0."""
+    return server.rating or 0
+
+
+async def connect_best_outbound_server(context: ApplicationContext) -> None:
+    """With ServerSettings.auto_connect on, connect the server with the best rating.
+
+    Only servers that are not filtered and rated above 0 are chosen. The connected
+    server stays unless another one is rated higher, so servers with equal ratings
+    do not take turns; a filtered connected server is replaced by any such server.
+    If the core cannot connect a server, the next best is tried; failures are only
+    logged. Nothing changes when the mode is off or no server is better.
+
+    Runs when a client turns the mode on and whenever ratings, servers or filters
+    change: after a check run, a subscription refresh, startup and a filter change.
+    """
+    async with context.core_lock:
+        # Read under the lock: a client that connected a server meanwhile turned it off.
+        if not context.settings.server_settings.get().auto_connect:
+            return
+        servers = context.settings.outbound_server.get_all()
+        connected = next((server for server in servers if server.is_connected), None)
+        floor = _rating(connected) if connected is not None and connected.filtered is None else 0
+        better = [
+            server for server in servers if server.filtered is None and _rating(server) > floor
+        ]
+        # Stable: servers with equal ratings keep their stored order.
+        for server in sorted(better, key=_rating, reverse=True):
+            try:
+                await _switch(context, server.id)
+            except CoreError:
+                continue
+            break
+        else:
+            return
+    await context.sync.notify("outbound_server")
+
+
+async def _switch(context: ApplicationContext, server_id: str) -> OutboundServer | None:
+    """Connect the core's main route to a stored server and mark it; hold core_lock.
+
+    Raises CoreError if the core cannot connect it; nothing is marked then.
+    """
+    try:
+        await context.core_client.outbound_connect(server_id)
+    except Exception as error:
+        log.exception("Failed to connect server %s", server_id)
+        raise CoreError("The core could not connect to the server") from error
+    return context.settings.outbound_server.set_connected(server_id)

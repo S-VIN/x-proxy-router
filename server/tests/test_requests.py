@@ -613,6 +613,68 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
             self.context.settings.server_settings.get(), replace(stored, outbound_tests=())
         )
 
+    async def test_auto_connect(self):
+        first, second = await self.check_servers()
+        servers = self.context.settings.outbound_server
+        for server, rating in ((first, 60), (second, 90)):
+            servers.update_health(
+                server.id, ping=None, speed=None, rating=rating, tests={}, filtered=None
+            )
+        await self.context.sync.notify("outbound_server")
+        for _ in range(5):
+            await asyncio.sleep(0)  # Let the writer send the change.
+        self.client.frames.clear()
+
+        def connections(update: dict) -> list[tuple[str, bool]]:
+            return [(server["id"], server["is_connected"]) for server in update["payload"]]
+
+        # Turned on, the mode reaches clients first, then the best server is connected.
+        updates, response = await self.client.request(
+            "change", "server_settings", {"id": 0, "auto_connect": True}
+        )
+        self.assertTrue(response["ok"])
+        self.assertEqual(
+            [update["model"] for update in updates], ["server_settings", "outbound_server"]
+        )
+        self.assertIs(updates[0]["payload"][0]["auto_connect"], True)
+        self.assertEqual(connections(updates[1]), [(second.id, True)])
+        # A server chosen by a client turns the mode off.
+        updates, response = await self.client.request(
+            "request", "connect_outbound_server", {"id": first.id}
+        )
+        self.assertTrue(response["ok"])
+        self.assertEqual(
+            [update["model"] for update in updates], ["server_settings", "outbound_server"]
+        )
+        self.assertIs(updates[0]["payload"][0]["auto_connect"], False)
+        self.assertEqual(connections(updates[1]), [(first.id, True), (second.id, False)])
+        # On again: back to the best server. A filter on it moves the connection.
+        await self.client.request("change", "server_settings", {"id": 0, "auto_connect": True})
+        updates, _ = await self.client.request("add", "reg_filter", {"reg": "^two$"})
+        self.assertEqual(
+            [update["model"] for update in updates],
+            ["reg_filter", "outbound_server", "outbound_server"],
+        )
+        self.assertEqual(connections(updates[2]), [(first.id, True), (second.id, False)])
+        # Turning the mode off changes only the setting.
+        updates, _ = await self.client.request(
+            "change", "server_settings", {"id": 0, "auto_connect": False}
+        )
+        self.assertEqual([update["model"] for update in updates], ["server_settings"])
+        self.assertEqual(
+            [call.args[0] for call in self.core.outbound_connect.await_args_list],
+            [second.id, first.id, second.id, first.id],
+        )
+        for value in (1, "true", None):
+            with self.subTest(auto_connect=value):
+                error = await self.client.error(
+                    "change", "server_settings", {"id": 0, "auto_connect": value}
+                )
+                self.assertEqual(
+                    (error["code"], error["details"]), ("bad_request", {"field": "auto_connect"})
+                )
+        self.assertFalse(self.context.settings.server_settings.get().auto_connect)
+
     async def test_malformed_messages(self):
         websocket = self.context.websocket
         frames = {

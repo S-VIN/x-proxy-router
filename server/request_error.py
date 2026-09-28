@@ -6,7 +6,7 @@ from typing import TypeVar
 
 from .models.serialization import JsonValue
 
-T = TypeVar("T", str, int)
+T = TypeVar("T", str, int, bool)
 
 
 class ErrorCode(StrEnum):
@@ -56,7 +56,7 @@ def expect_fields(
 def field_value(payload: dict[str, JsonValue], name: str, kind: type[T], *, prefix: str = "") -> T:
     """Return a payload field of the given JSON type; booleans are not integers."""
     value = payload[name]
-    if not isinstance(value, kind) or isinstance(value, bool):
+    if not isinstance(value, kind) or (isinstance(value, bool) and kind is not bool):
         name = prefix + name
         raise RequestError(
             ErrorCode.BAD_REQUEST, f"Field {name} must be {kind.__name__}", {"field": name}

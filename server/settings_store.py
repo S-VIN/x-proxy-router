@@ -42,19 +42,28 @@ class ServerSettingsStore:
                 "id INTEGER PRIMARY KEY NOT NULL CHECK (id = 0), "
                 "subscription_refresh_interval INTEGER NOT NULL, "
                 "last_subscription_refresh TEXT, "
-                "outbound_tests TEXT NOT NULL)"
+                "outbound_tests TEXT NOT NULL, "
+                "auto_connect INTEGER NOT NULL DEFAULT 0)"
             )
+            # Databases created before auto_connect get the column, with the mode off.
+            columns = {
+                row[1] for row in self._connection.execute("PRAGMA table_info(server_settings)")
+            }
+            if "auto_connect" not in columns:
+                self._connection.execute(
+                    "ALTER TABLE server_settings ADD COLUMN auto_connect INTEGER NOT NULL DEFAULT 0"
+                )
             # Dataclass defaults fill a missing row; an existing row is kept.
             self._write(ServerSettings(), "INSERT OR IGNORE")
 
     def get(self) -> ServerSettings:
         row = self._connection.execute(
-            "SELECT subscription_refresh_interval, last_subscription_refresh, outbound_tests "
-            "FROM server_settings WHERE id = 0"
+            "SELECT subscription_refresh_interval, last_subscription_refresh, outbound_tests, "
+            "auto_connect FROM server_settings WHERE id = 0"
         ).fetchone()
         if row is None:
             raise LookupError("The server_settings row was deleted outside the application")
-        interval, refreshed, tests = row
+        interval, refreshed, tests, auto_connect = row
         return ServerSettings(
             subscription_refresh_interval=interval,
             last_subscription_refresh=(
@@ -66,6 +75,7 @@ class ServerSettingsStore:
                 )
                 for test in json.loads(tests)
             ),
+            auto_connect=bool(auto_connect),
         )
 
     def save(self, settings: ServerSettings) -> None:
@@ -80,13 +90,14 @@ class ServerSettingsStore:
         refreshed = settings.last_subscription_refresh
         self._connection.execute(
             f"{statement} INTO server_settings "
-            "(id, subscription_refresh_interval, last_subscription_refresh, outbound_tests) "
-            "VALUES (?, ?, ?, ?)",
+            "(id, subscription_refresh_interval, last_subscription_refresh, outbound_tests, "
+            "auto_connect) VALUES (?, ?, ?, ?, ?)",
             (
                 settings.id,
                 settings.subscription_refresh_interval,
                 refreshed.isoformat() if refreshed is not None else None,
                 json.dumps(serialize(settings.outbound_tests), ensure_ascii=False),
+                settings.auto_connect,
             ),
         )
 

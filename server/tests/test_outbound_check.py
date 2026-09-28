@@ -423,6 +423,20 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         await handler.test_outbound_servers(self.context)
         self.core.test_connect.assert_not_awaited()
 
+    async def test_run_connects_the_best_server_in_auto_mode(self):
+        slow, fast = self.saved(vless(1)), self.saved(vless(2))
+        self.ping.side_effect = lambda address, port: {1: 400, 2: 20}[port]
+        await handler.test_outbound_servers(self.context)
+        self.core.outbound_connect.assert_not_awaited()
+        settings = self.context.settings.server_settings
+        settings.save(replace(settings.get(), auto_connect=True))
+        self.context.settings.outbound_server.set_connected(slow.id)
+        await handler.test_outbound_servers(self.context)
+        self.core.outbound_connect.assert_awaited_once_with(fast.id)
+        connected = self.context.settings.outbound_server.get_connected()
+        assert connected is not None
+        self.assertEqual(connected.id, fast.id)
+
 
 class MihomoCheckTests(unittest.IsolatedAsyncioTestCase):
     """Real traffic: Mihomo -> local VLESS relay -> local HTTP server."""
