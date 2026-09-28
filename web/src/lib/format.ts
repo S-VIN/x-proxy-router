@@ -1,4 +1,4 @@
-import type { TestRule } from './api/protocol';
+import type { FilterReason, TestRule } from './api/protocol';
 
 export type Tone = 'neutral' | 'accent' | 'success' | 'warning' | 'caution' | 'danger';
 
@@ -161,6 +161,17 @@ export function stackLabel(server: {
     transportLabel(server.transport),
     securityLabel(server.security),
   ].join(' · ');
+}
+
+const FILTER_TEXTS: Record<string, string> = {
+  by_reg_filter: 'Its name matches a filter. Checks skip it.',
+  by_ping: 'It did not answer the ping in the last check. Checks keep trying it.',
+  by_subscription: 'Its subscription filters it.',
+};
+
+/** Why the server is filtered and whether checks can bring it back. */
+export function filterText(reason: FilterReason): string {
+  return FILTER_TEXTS[reason] ?? `Filtered: ${reason}.`;
 }
 
 export function yesNo(value: boolean): string {

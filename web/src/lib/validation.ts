@@ -1,4 +1,4 @@
-import type { OutboundTest } from './api/protocol';
+import type { OutboundTest, RegFilter } from './api/protocol';
 
 /** Why the value is not an http(s) URL with a host, or null when it is. */
 export function httpUrlError(value: string): string | null {
@@ -14,6 +14,16 @@ export function httpUrlError(value: string): string | null {
     return 'Use an http:// or https:// link.';
   }
   if (!url.hostname) return 'The link has no host.';
+  return null;
+}
+
+/**
+ * Why the value cannot be added as a name filter, or null. The syntax is Python's,
+ * so only the server checks it. Spaces are part of an expression and kept.
+ */
+export function regFilterError(value: string, filters: readonly RegFilter[]): string | null {
+  if (!value.trim()) return 'Enter a regular expression.';
+  if (filters.some((filter) => filter.reg === value)) return 'This filter is already added.';
   return null;
 }
 

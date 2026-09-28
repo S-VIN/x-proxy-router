@@ -2,10 +2,17 @@
   import { describeError } from '../../lib/api/errors';
   import type { OutboundServer } from '../../lib/api/protocol';
   import { protocolLabel } from '../../lib/format';
-  import { COMPARATORS, keepOrder, SORT_LABELS, type SortKey } from '../../lib/ordering';
+  import {
+    COMPARATORS,
+    filteredLast,
+    keepOrder,
+    SORT_LABELS,
+    type SortKey,
+  } from '../../lib/ordering';
   import {
     connection,
     outboundServers,
+    regFilters,
     serverSettings,
     subscriptionLinks,
     tasks,
@@ -102,12 +109,14 @@
   });
 
   // While servers are being checked, each result would move its row. Rows keep
-  // their places until the check ends; changing the sort or filters re-sorts.
+  // their places until the check ends; changing the sort or filters, including
+  // name filters, re-sorts. Filtered servers go last: they cannot be connected.
   let shownIds: string[] = [];
   let shownQuery = '';
   const rows = $derived.by(() => {
-    const query = [sort, subscription, protocol, needle].join('\n');
-    const compare = COMPARATORS[sort];
+    const nameFilters = regFilters.list.map((filter) => filter.id).join(' ');
+    const query = [sort, subscription, protocol, needle, nameFilters].join('\n');
+    const compare = filteredLast(COMPARATORS[sort]);
     const result =
       tasks.testing && query === shownQuery
         ? keepOrder(shownIds, filtered, compare)
@@ -145,7 +154,7 @@
   fill
   flush
   meta={loading ? undefined : filtersActive ? `${rows.length} of ${total}` : String(total)}
-  hint="Click a server for details. A check measures ping and speed and runs the tests through every server, one by one; rows keep their places until it ends."
+  hint="Click a server for details. Filtered servers are grayed out at the end of the list and cannot be connected. A check measures ping and speed and runs the tests through every server, one by one; rows keep their places until it ends."
 >
   {#snippet actions()}
     <Button

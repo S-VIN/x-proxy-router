@@ -1,5 +1,6 @@
 <script lang="ts">
   import ConnectionBlock from './components/blocks/ConnectionBlock.svelte';
+  import FiltersBlock from './components/blocks/FiltersBlock.svelte';
   import ServersBlock from './components/blocks/ServersBlock.svelte';
   import SubscriptionsBlock from './components/blocks/SubscriptionsBlock.svelte';
   import TestsBlock from './components/blocks/TestsBlock.svelte';
@@ -23,13 +24,14 @@
   <Dashboard>
     {#snippet left()}
       <SubscriptionsBlock order={3} />
+      <FiltersBlock order={4} />
     {/snippet}
     {#snippet center()}
       <ServersBlock order={2} />
     {/snippet}
     {#snippet right()}
       <ConnectionBlock order={1} />
-      <TestsBlock order={4} />
+      <TestsBlock order={5} />
     {/snippet}
   </Dashboard>
 </div>

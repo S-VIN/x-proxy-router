@@ -38,6 +38,13 @@ export const COMPARATORS: Record<SortKey, (a: OutboundServer, b: OutboundServer)
   name: names,
 };
 
+/** Servers that can be connected first, then filtered ones, each group by `compare`. */
+export function filteredLast(
+  compare: (a: OutboundServer, b: OutboundServer) => number,
+): (a: OutboundServer, b: OutboundServer) => number {
+  return (a, b) => Number(a.filtered !== null) - Number(b.filtered !== null) || compare(a, b);
+}
+
 /**
  * Keep items in a previous order: known ids stay where they were, items that
  * disappeared are dropped and new ones follow, sorted by `compare`.

@@ -34,6 +34,15 @@ export interface SubscriptionLink {
   url_short: string;
 }
 
+export interface RegFilter {
+  id: string;
+  /** Python regular expression searched anywhere in server names, case sensitive. */
+  reg: string;
+}
+
+/** Why a server is filtered; by_reg_filter wins when there are several reasons. */
+export type FilterReason = Open<'by_reg_filter' | 'by_ping' | 'by_subscription'>;
+
 export interface OutboundServer {
   id: string;
   name: string;
@@ -69,6 +78,8 @@ export interface OutboundServer {
   rating: number | null;
   /** Test alias → passed; null when not checked. May keep aliases of removed tests. */
   tests: Record<string, boolean> | null;
+  /** Filtered servers cannot be connected; null when not filtered. */
+  filtered: FilterReason | null;
   is_connected: boolean;
 }
 
@@ -82,6 +93,7 @@ export interface Task {
 export interface Models {
   server_settings: ServerSettings;
   subscription_link: SubscriptionLink;
+  reg_filter: RegFilter;
   outbound_server: OutboundServer;
   task: Task;
 }
@@ -91,6 +103,7 @@ export type ModelName = keyof Models;
 export const MODEL_NAMES: readonly ModelName[] = [
   'server_settings',
   'subscription_link',
+  'reg_filter',
   'outbound_server',
   'task',
 ];
@@ -141,6 +154,8 @@ export interface Requests {
   'add/subscription_link': { payload: { url: string }; result: { id: string } };
   'change/subscription_link': { payload: { id: string; url?: string }; result: Empty };
   'delete/subscription_link': { payload: { id: string }; result: Empty };
+  'add/reg_filter': { payload: { reg: string }; result: { id: string } };
+  'delete/reg_filter': { payload: { id: string }; result: Empty };
   'change/server_settings': {
     payload: { id: 0; subscription_refresh_interval?: number; outbound_tests?: OutboundTest[] };
     result: Empty;
