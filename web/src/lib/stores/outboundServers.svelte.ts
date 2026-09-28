@@ -17,6 +17,10 @@ export class OutboundServersStore {
     return counts;
   });
   protocols = $derived([...new Set(this.list.map((server) => server.protocol))].sort());
+  /** Servers whose names match a filter; that reason wins, so each matching server counts. */
+  filteredByName = $derived(
+    this.list.filter((server) => server.filtered === 'by_reg_filter').length,
+  );
   /**
    * The server dropped the connection while the page was open: the connected server
    * was removed or can no longer be used. Connecting never leaves no server connected,

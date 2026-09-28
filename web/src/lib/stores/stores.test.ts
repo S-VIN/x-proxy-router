@@ -3,6 +3,7 @@ import { Connection } from '../api/connection.svelte';
 import type { ModelName } from '../api/protocol';
 import { applyMessage } from './collection.svelte';
 import { OutboundServersStore } from './outboundServers.svelte';
+import { RegFiltersStore } from './regFilters.svelte';
 import { linkColors, linkLabels, SubscriptionLinksStore } from './subscriptionLinks.svelte';
 import { TasksStore } from './tasks.svelte';
 
@@ -96,6 +97,45 @@ describe('stores', () => {
     expect(servers.lost).toBe(false);
     deliver('outbound_server', [], false, ['s2']);
     expect(servers.lost).toBe(true);
+  });
+
+  it('count servers filtered by name', () => {
+    const { connection, deliver } = fakeConnection();
+    const servers = new OutboundServersStore(connection);
+    deliver('outbound_server', [
+      { id: 's1', filtered: 'by_reg_filter', is_connected: false },
+      { id: 's2', filtered: 'by_ping', is_connected: false },
+      { id: 's3', filtered: null, is_connected: false },
+    ]);
+    expect(servers.filteredByName).toBe(1);
+    deliver(
+      'outbound_server',
+      [{ id: 's2', filtered: 'by_reg_filter', is_connected: false }],
+      false,
+    );
+    expect(servers.filteredByName).toBe(2);
+  });
+
+  it('keep name filters and send their requests', () => {
+    const { connection, deliver } = fakeConnection();
+    const sent: unknown[] = [];
+    connection.request = ((key: string, payload: unknown) => {
+      sent.push([key, payload]);
+      return Promise.resolve({});
+    }) as Connection['request'];
+    const filters = new RegFiltersStore(connection);
+    deliver('reg_filter', [
+      { id: 'f1', reg: '^RU' },
+      { id: 'f2', reg: '(?i)russia' },
+    ]);
+    deliver('reg_filter', [], false, ['f1']);
+    expect(filters.list).toEqual([{ id: 'f2', reg: '(?i)russia' }]);
+    void filters.add(' US$');
+    void filters.remove('f2');
+    expect(sent).toEqual([
+      ['add/reg_filter', { reg: ' US$' }],
+      ['delete/reg_filter', { id: 'f2' }],
+    ]);
   });
 
   it('follow task status', () => {

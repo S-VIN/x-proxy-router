@@ -1,6 +1,7 @@
 <script lang="ts">
   import { describeError } from '../../../lib/api/errors';
   import type { OutboundServer, OutboundTest } from '../../../lib/api/protocol';
+  import { filterText } from '../../../lib/format';
   import { outboundServers } from '../../../lib/stores';
   import Badge from '../../ui/Badge.svelte';
   import Button from '../../ui/Button.svelte';
@@ -47,7 +48,12 @@
   }
 </script>
 
-<li class="row" class:connected={server.is_connected} class:expanded>
+<li
+  class="row"
+  class:connected={server.is_connected}
+  class:filtered={server.filtered !== null}
+  class:expanded
+>
   <div class="line">
     <button
       type="button"
@@ -71,7 +77,17 @@
     </button>
     <div class="action">
       {#if server.is_connected}
-        <Badge tone="success">Connected</Badge>
+        <!-- A server filtered after connecting stays connected. -->
+        <Badge
+          tone="success"
+          title={server.filtered === null
+            ? undefined
+            : `Stays connected, but is filtered. ${filterText(server.filtered)}`}
+        >
+          Connected
+        </Badge>
+      {:else if server.filtered !== null}
+        <Badge title="Cannot be connected. {filterText(server.filtered)}">Filtered</Badge>
       {:else}
         <Button size="sm" busy={connecting} disabled={!ready} onclick={connect}>Connect</Button>
       {/if}
@@ -95,6 +111,20 @@
   .row.connected {
     background: var(--color-accent-soft);
     box-shadow: inset 3px 0 0 var(--color-accent);
+  }
+
+  /* Filtered servers cannot be connected: gray and faded, not bright like usable ones. */
+  .filtered .name {
+    color: var(--color-text-muted);
+    font-weight: var(--weight-regular);
+    /* Flags and other emoji in names. */
+    filter: grayscale(1);
+  }
+
+  .filtered .subscription,
+  .filtered .metric {
+    opacity: 0.5;
+    filter: grayscale(1);
   }
 
   .line {

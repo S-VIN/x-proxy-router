@@ -1,6 +1,13 @@
 <script lang="ts">
   import type { OutboundServer, OutboundTest } from '../../../lib/api/protocol';
-  import { formatPing, formatSpeed, pingTone, stackLabel, yesNo } from '../../../lib/format';
+  import {
+    filterText,
+    formatPing,
+    formatSpeed,
+    pingTone,
+    stackLabel,
+    yesNo,
+  } from '../../../lib/format';
   import Icon from '../../ui/Icon.svelte';
   import Stat from '../../ui/Stat.svelte';
 
@@ -71,6 +78,18 @@
 
 <div class="details" {id}>
   <div class="card">
+    {#if server.filtered !== null}
+      <p class="filtered">
+        <Icon name="filter" size={14} />
+        <span>
+          {server.is_connected
+            ? 'Filtered: it stays connected, but cannot be connected again after a switch.'
+            : 'Filtered: it cannot be connected.'}
+          {filterText(server.filtered)}
+        </span>
+      </p>
+    {/if}
+
     <dl class="key">
       <Stat tile label="Ping" tone={pingTone(server.ping)}>{formatPing(server.ping)}</Stat>
       <Stat tile label="Speed" tone={server.speed === 0 ? 'danger' : 'neutral'}>
@@ -116,6 +135,20 @@
     padding: var(--space-2);
     border-radius: var(--radius-md);
     background: var(--color-surface-sunken);
+  }
+
+  .filtered {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-1);
+    padding: 0 2px;
+    color: var(--color-text-muted);
+    font-size: var(--text-sm);
+  }
+
+  /* In line with the first line of the text. */
+  .filtered > :global(svg) {
+    margin-top: 3px;
   }
 
   /* Key figures: framed, with large values. The protocol takes the most room. */

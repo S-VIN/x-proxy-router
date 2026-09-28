@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { OutboundServer } from './api/protocol';
 import {
+  filterText,
   formatInterval,
   formatPing,
   formatRelative,
@@ -9,8 +10,8 @@ import {
   splitInterval,
   stackLabel,
 } from './format';
-import { COMPARATORS, keepOrder } from './ordering';
-import { hasErrors, httpUrlError, validateTests } from './validation';
+import { COMPARATORS, filteredLast, keepOrder } from './ordering';
+import { hasErrors, httpUrlError, regFilterError, validateTests } from './validation';
 
 function server(id: string, fields: Partial<OutboundServer>): OutboundServer {
   return { id, name: id, rating: null, ping: null, speed: null, ...fields } as OutboundServer;
@@ -66,6 +67,11 @@ describe('format', () => {
       'trojan · TCP · TLS',
     );
   });
+
+  it('explains filter reasons, new ones as is', () => {
+    expect(filterText('by_reg_filter')).toContain('name matches a filter');
+    expect(filterText('by_country')).toBe('Filtered: by_country.');
+  });
 });
 
 describe('ordering', () => {
@@ -94,6 +100,21 @@ describe('ordering', () => {
     const order = keepOrder(['b', 'gone', 'a'], items, COMPARATORS.rating);
     expect(order.map((s) => s.id)).toEqual(['b', 'a', 'new2', 'new1']);
   });
+
+  it('puts filtered servers last, each group in the chosen order', () => {
+    const list = [
+      server('a', { rating: 95, filtered: 'by_reg_filter' }),
+      server('b', { rating: 40, filtered: null }),
+      server('c', { rating: 0, filtered: 'by_ping' }),
+      server('d', { rating: 70, filtered: null }),
+    ];
+    expect(list.sort(filteredLast(COMPARATORS.rating)).map((s) => s.id)).toEqual([
+      'd',
+      'b',
+      'a',
+      'c',
+    ]);
+  });
 });
 
 describe('validation', () => {
@@ -115,5 +136,14 @@ describe('validation', () => {
     expect(errors[2]).toMatchObject({ alias: expect.any(String), url: expect.any(String) });
     expect(hasErrors(errors)).toBe(true);
     expect(hasErrors([{}])).toBe(false);
+  });
+
+  it('checks new name filters, leaving the syntax to the server', () => {
+    const filters = [{ id: '1', reg: '^RU' }];
+    expect(regFilterError('(?i)russia', filters)).toBeNull();
+    expect(regFilterError('(unclosed', filters)).toBeNull();
+    expect(regFilterError(' RU', filters)).toBeNull();
+    expect(regFilterError('  ', filters)).not.toBeNull();
+    expect(regFilterError('^RU', filters)).not.toBeNull();
   });
 });
