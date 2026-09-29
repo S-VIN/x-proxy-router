@@ -4,7 +4,7 @@ import logging
 from dataclasses import replace
 
 from ..models.application_context import ApplicationContext
-from ..models.outbound_server import OutboundServer
+from ..models.outbound_server import FilterReason, OutboundServer
 
 log = logging.getLogger(__name__)
 
@@ -24,11 +24,13 @@ async def register_outbound_servers(context: ApplicationContext) -> None:
     keep the others out. outbound_register blocks both routes; the main route is
     then connected again to the server with is_connected. If that server was
     not registered or the core cannot connect to it, its is_connected is cleared.
+    A server filtered by name is not connected again either, and auto_connect is
+    turned off, as in disconnect_filtered_server.
     A running server check is awaited first, so it is not cut off midway.
 
-    Filtered servers are registered too, and the connected one stays connected
-    when it gets filtered: filters only decide which servers the application
-    checks and lets clients connect, so changing them does not touch the core.
+    Filtered servers are registered too: filters only decide which servers the
+    application checks and connects. A connected server filtered by ping stays
+    connected.
     """
     servers = []
     for server in context.settings.outbound_server.get_all():
@@ -44,7 +46,11 @@ async def register_outbound_servers(context: ApplicationContext) -> None:
         connected = context.settings.outbound_server.get_connected()
         if connected is None:
             return
-        if connected.id in {server.id for server in servers}:
+        if connected.filtered == FilterReason.BY_REG_FILTER:
+            # The route is blocked already by outbound_register.
+            log.info("Connected server %s is filtered by name and is disconnected", connected.id)
+            _turn_auto_connect_off(context)
+        elif connected.id in {server.id for server in servers}:
             try:
                 await context.core_client.outbound_connect(connected.id)
                 return
@@ -53,6 +59,7 @@ async def register_outbound_servers(context: ApplicationContext) -> None:
         else:
             log.warning("Connected server %s is not registered in the core", connected.id)
         context.settings.outbound_server.set_connected(None)
+    await context.sync.notify("server_settings")
     await context.sync.notify("outbound_server")
 
 
@@ -77,12 +84,40 @@ async def connect_outbound_server(
             raise ServerFiltered(f"Server {server_id} is filtered: {server.filtered}")
         server = await _switch(context, server_id)
         # Under the lock, so auto_connect cannot replace the chosen server meanwhile.
-        settings = context.settings.server_settings.get()
-        if settings.auto_connect:
-            context.settings.server_settings.save(replace(settings, auto_connect=False))
+        _turn_auto_connect_off(context)
     await context.sync.notify("server_settings")
     await context.sync.notify("outbound_server")
     return server
+
+
+async def disconnect_filtered_server(context: ApplicationContext) -> None:
+    """Disconnect the connected server if its name matches a filter.
+
+    The core's main route is blocked, is_connected is cleared and auto_connect is
+    turned off, so nothing is connected until a client chooses a server or turns
+    the mode on. Clients get server_settings, then outbound_server. If the core
+    fails, the error is logged and the server is marked disconnected anyway.
+    A connected server filtered by ping stays connected.
+    """
+    async with context.core_lock:
+        connected = context.settings.outbound_server.get_connected()
+        if connected is None or connected.filtered != FilterReason.BY_REG_FILTER:
+            return
+        try:
+            await context.core_client.outbound_disconnect()
+        except Exception:
+            log.exception("Failed to disconnect filtered server %s", connected.id)
+        context.settings.outbound_server.set_connected(None)
+        _turn_auto_connect_off(context)
+    await context.sync.notify("server_settings")
+    await context.sync.notify("outbound_server")
+
+
+def _turn_auto_connect_off(context: ApplicationContext) -> None:
+    """Save auto_connect = False; the caller notifies server_settings."""
+    settings = context.settings.server_settings.get()
+    if settings.auto_connect:
+        context.settings.server_settings.save(replace(settings, auto_connect=False))
 
 
 def _rating(server: OutboundServer) -> int:
@@ -95,12 +130,13 @@ async def connect_best_outbound_server(context: ApplicationContext) -> None:
 
     Only servers that are not filtered and rated above 0 are chosen. The connected
     server stays unless another one is rated higher, so servers with equal ratings
-    do not take turns; a filtered connected server is replaced by any such server.
+    do not take turns; a connected server filtered by ping is replaced by any such
+    server (one filtered by name is disconnected: disconnect_filtered_server).
     If the core cannot connect a server, the next best is tried; failures are only
     logged. Nothing changes when the mode is off or no server is better.
 
     Runs when a client turns the mode on and whenever ratings, servers or filters
-    change: after a check run, a subscription refresh, startup and a filter change.
+    change: after a check run, a subscription refresh, startup and a filter deletion.
     """
     async with context.core_lock:
         # Read under the lock: a client that connected a server meanwhile turned it off.

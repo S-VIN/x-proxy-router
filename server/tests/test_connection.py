@@ -12,6 +12,7 @@ from server.handlers.core import (
     ServerFiltered,
     connect_best_outbound_server,
     connect_outbound_server,
+    disconnect_filtered_server,
     register_outbound_servers,
 )
 from server.handlers.subscriptions import refresh_subscriptions
@@ -114,18 +115,69 @@ class ConnectionTests(ConnectionTestCase):
         assert connected is not None
         self.assertEqual((connected.id, connected.filtered), (self.first.id, FilterReason.BY_PING))
 
-    async def test_filtered_connected_server_stays_connected(self):
+    async def test_server_filtered_by_name_is_disconnected(self):
+        settings = self.context.settings.server_settings
         await connect_outbound_server(self.context, self.first.id)
-        self.context.settings.reg_filter.add(RegFilter(reg="one"))
+        # Filters on other servers and filtering by ping keep the connection.
+        self.context.settings.reg_filter.add(RegFilter(reg="^two$"))
+        self.store.update_health(
+            self.first.id, ping=None, speed=None, rating=0, tests={}, filtered=FilterReason.BY_PING
+        )
+        await disconnect_filtered_server(self.context)
+        self.core.outbound_disconnect.assert_not_awaited()
+        connected = self.store.get_connected()
+        assert connected is not None
+        self.assertEqual(connected.id, self.first.id)
+        settings.save(replace(settings.get(), auto_connect=True))
+        await self.context.sync.notify("server_settings")
+        client = Client(self.context.websocket)
+        await client.messages()
+        # A filter on its name disconnects it and turns auto_connect off.
+        self.context.settings.reg_filter.add(RegFilter(reg="^one$"))
+        await disconnect_filtered_server(self.context)
+        self.core.outbound_disconnect.assert_awaited_once_with()
+        self.assertIsNone(self.store.get_connected())
+        self.assertFalse(settings.get().auto_connect)
+        messages = await client.messages()
+        self.assertEqual(
+            [message["model"] for message in messages], ["server_settings", "outbound_server"]
+        )
+        # Nothing is chosen instead.
+        await connect_best_outbound_server(self.context)
+        self.core.outbound_connect.assert_awaited_once_with(self.first.id)
+
+    async def test_filtered_server_is_marked_disconnected_when_the_core_fails(self):
+        await connect_outbound_server(self.context, self.first.id)
+        self.context.settings.reg_filter.add(RegFilter(reg="^one$"))
+        self.core.outbound_disconnect.side_effect = RuntimeError("down")
+        with self.assertLogs("server.handlers.core", level="ERROR"):
+            await disconnect_filtered_server(self.context)
+        self.assertIsNone(self.store.get_connected())
+
+    async def test_registration_keeps_a_server_filtered_by_ping_but_not_by_name(self):
+        settings = self.context.settings.server_settings
+        await connect_outbound_server(self.context, self.first.id)
+        self.store.update_health(
+            self.first.id, ping=None, speed=None, rating=0, tests={}, filtered=FilterReason.BY_PING
+        )
         self.core.reset_mock()
-        # Filtered servers stay registered; the connection survives the registration.
+        # Filtered servers stay registered; one filtered by ping stays connected.
         await register_outbound_servers(self.context)
         [registered] = self.core.outbound_register.await_args.args
         self.assertEqual({server.id for server in registered}, {self.first.id, self.second.id})
         self.core.outbound_connect.assert_awaited_once_with(self.first.id)
         connected = self.store.get_connected()
         assert connected is not None
-        self.assertEqual(connected.filtered, FilterReason.BY_REG_FILTER)
+        self.assertEqual(connected.id, self.first.id)
+        # One filtered by name, e.g. by an older version, is not connected again.
+        settings.save(replace(settings.get(), auto_connect=True))
+        self.context.settings.reg_filter.add(RegFilter(reg="one"))
+        self.core.reset_mock()
+        with self.assertLogs("server.handlers.core", level="INFO"):
+            await register_outbound_servers(self.context)
+        self.core.outbound_connect.assert_not_awaited()
+        self.assertIsNone(self.store.get_connected())
+        self.assertFalse(settings.get().auto_connect)
 
     async def test_registration_connects_the_remembered_server_again(self):
         self.store.set_connected(self.second.id)
@@ -236,12 +288,14 @@ class AutoConnectTests(ConnectionTestCase):
             [self.first.id, self.first.id],
         )
 
-    async def test_filtered_or_unchecked_connected_server_is_replaced(self):
+    async def test_server_filtered_by_ping_or_unchecked_is_replaced(self):
         self.rate(self.first, 40)
         self.rate(self.second, 90)
         await connect_outbound_server(self.context, self.second.id)
         self.set_auto_connect(True)
-        self.context.settings.reg_filter.add(RegFilter(reg="^two$"))
+        self.store.update_health(
+            self.second.id, ping=None, speed=None, rating=0, tests={}, filtered=FilterReason.BY_PING
+        )
         await connect_best_outbound_server(self.context)
         self.assertEqual(self.connected_id(), self.first.id)
         # A server that is not checked yet gives way to any rated one.

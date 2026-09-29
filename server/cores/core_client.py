@@ -55,6 +55,11 @@ class CoreClient(ABC):
         ...
 
     @abstractmethod
+    async def outbound_disconnect(self) -> None:
+        """Block new main traffic, keeping its listener and registrations."""
+        ...
+
+    @abstractmethod
     async def test_connect(self, server_id: str) -> None:
         """Select an already registered server for the test endpoint."""
         ...

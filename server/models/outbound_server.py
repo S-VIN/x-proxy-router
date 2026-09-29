@@ -171,11 +171,12 @@ class OutboundServer:
     tests: dict[str, bool] | None = None
     # Why the server is filtered, or None. A filtered server cannot be connected,
     # and checks skip it, except BY_PING: those are checked again to come back.
+    # A connected server that gets BY_REG_FILTER is disconnected.
     # BY_REG_FILTER takes precedence; it is computed from RegFilters on every
     # read of the store and never stored.
     filtered: FilterReason | None = None
     # The core's main route goes through this server; true for at most one server.
-    # Changed only by connect_outbound_server, kept across subscription refreshes.
+    # Changed by handlers/core.py only, kept across subscription refreshes.
     is_connected: bool = False
 
     def __post_init__(self):

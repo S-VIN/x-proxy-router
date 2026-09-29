@@ -95,6 +95,10 @@ class XrayClient(CoreClient):
         self._require_started()
         await self._connect("main", server_id)
 
+    async def outbound_disconnect(self) -> None:
+        self._require_started()
+        await self._block("main")
+
     async def outbound_register(self, servers: list[OutboundServer]) -> None:
         self._require_started()
         self._validate_server_ids(servers)
@@ -125,7 +129,10 @@ class XrayClient(CoreClient):
 
     async def test_stop(self) -> None:
         self._require_started()
-        outbounds = {role: tag for role, tag in self._outbounds.items() if role != "test"}
+        await self._block("test")
+
+    async def _block(self, role: str):
+        outbounds = {other: tag for other, tag in self._outbounds.items() if other != role}
         await self._route(self._inbounds, outbounds)
         self._outbounds = outbounds
 

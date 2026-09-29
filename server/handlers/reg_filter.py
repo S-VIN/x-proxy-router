@@ -6,7 +6,7 @@ from ..models.application_context import ApplicationContext
 from ..models.reg_filter import RegFilter
 from ..models.serialization import JsonValue
 from ..request_error import ErrorCode, RequestError, expect_fields, field_value
-from .core import connect_best_outbound_server
+from .core import connect_best_outbound_server, disconnect_filtered_server
 
 MODEL = "reg_filter"
 
@@ -18,7 +18,8 @@ async def add_reg_filter(
 
     Servers whose names match get filtered = by_reg_filter at once: the store
     computes it on every read. The changed servers reach clients before the response.
-    With auto_connect on, a connected server that gets filtered is replaced by the best one.
+    A connected server that matches is disconnected and auto_connect is turned off
+    (disconnect_filtered_server), so nothing is connected.
     """
     expect_fields(payload, {"reg"})
     try:
@@ -32,8 +33,9 @@ async def add_reg_filter(
             ErrorCode.CONFLICT, "The filter already exists", {"field": "reg"}
         ) from None
     await context.sync.notify(MODEL)
+    # Before the servers are sent, so a disconnected server reaches clients in one message.
+    await disconnect_filtered_server(context)
     await context.sync.notify("outbound_server")
-    await connect_best_outbound_server(context)
     return {"id": reg_filter.id}
 
 

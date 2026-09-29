@@ -196,6 +196,12 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self.ping(await self.socks(c.test_port), b"main:")
         self.assertEqual(c.process_manager.status().pid, pid)
         await self.ping(connection, b"main:")
+        await c.outbound_disconnect()
+        proxies = (await c.rest_client.get_proxies())["proxies"]
+        self.assertEqual((proxies["main"]["now"], proxies["test"]["now"]), ("REJECT", first.id))
+        await self.ping(await self.socks(c.test_port), b"main:")
+        await c.outbound_connect(second.id)
+        await self.ping(await self.socks(c.proxy_port), b"test:")
 
     async def test_udp_routes_are_independent(self):
         loop = asyncio.get_running_loop()

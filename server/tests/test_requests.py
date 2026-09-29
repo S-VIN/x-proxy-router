@@ -450,6 +450,34 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(self.context.settings.reg_filter.get_all(), [])
 
+    async def test_filter_on_the_connected_server_disconnects_it(self):
+        first, _ = await self.check_servers()
+        await self.client.request("request", "connect_outbound_server", {"id": first.id})
+        updates, response = await self.client.request("add", "reg_filter", {"reg": "^one$"})
+        self.assertTrue(response["ok"])
+        # The mode was off, so only the server changes: filtered and disconnected at once.
+        self.assertEqual([update["model"] for update in updates], ["reg_filter", "outbound_server"])
+        self.assertEqual(
+            [
+                (server["id"], server["filtered"], server["is_connected"])
+                for server in updates[1]["payload"]
+            ],
+            [(first.id, "by_reg_filter", False)],
+        )
+        self.core.outbound_disconnect.assert_awaited_once_with()
+        # Deleting the filter does not connect the server again.
+        updates, _ = await self.client.request(
+            "delete", "reg_filter", {"id": response["payload"]["id"]}
+        )
+        self.assertEqual(
+            [
+                (server["id"], server["filtered"], server["is_connected"])
+                for server in updates[1]["payload"]
+            ],
+            [(first.id, None, False)],
+        )
+        self.assertIsNone(self.context.settings.outbound_server.get_connected())
+
     async def test_reg_filter_errors(self):
         existing = RegFilter(reg="^RU")
         self.context.settings.reg_filter.add(existing)
@@ -648,22 +676,32 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIs(updates[0]["payload"][0]["auto_connect"], False)
         self.assertEqual(connections(updates[1]), [(first.id, True), (second.id, False)])
-        # On again: back to the best server. A filter on it moves the connection.
+        # On again: back to the best server. Turning the mode off changes only the setting.
         await self.client.request("change", "server_settings", {"id": 0, "auto_connect": True})
-        updates, _ = await self.client.request("add", "reg_filter", {"reg": "^two$"})
-        self.assertEqual(
-            [update["model"] for update in updates],
-            ["reg_filter", "outbound_server", "outbound_server"],
-        )
-        self.assertEqual(connections(updates[2]), [(first.id, True), (second.id, False)])
-        # Turning the mode off changes only the setting.
         updates, _ = await self.client.request(
             "change", "server_settings", {"id": 0, "auto_connect": False}
         )
         self.assertEqual([update["model"] for update in updates], ["server_settings"])
+        # A filter on the connected server disconnects it and turns the mode off.
+        await self.client.request("change", "server_settings", {"id": 0, "auto_connect": True})
+        updates, _ = await self.client.request("add", "reg_filter", {"reg": "^two$"})
+        self.assertEqual(
+            [update["model"] for update in updates],
+            ["reg_filter", "server_settings", "outbound_server"],
+        )
+        self.assertIs(updates[1]["payload"][0]["auto_connect"], False)
+        self.assertEqual(
+            [
+                (server["id"], server["filtered"], server["is_connected"])
+                for server in updates[2]["payload"]
+            ],
+            [(second.id, "by_reg_filter", False)],
+        )
+        self.assertIsNone(servers.get_connected())
+        self.core.outbound_disconnect.assert_awaited_once_with()
         self.assertEqual(
             [call.args[0] for call in self.core.outbound_connect.await_args_list],
-            [second.id, first.id, second.id, first.id],
+            [second.id, first.id, second.id],
         )
         for value in (1, "true", None):
             with self.subTest(auto_connect=value):
