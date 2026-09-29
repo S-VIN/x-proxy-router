@@ -2,8 +2,8 @@
 
 from uuid import uuid4
 
-from ..core_client import CoreClient
 from ...models import CoreState, OutboundServer
+from ..core_client import CoreClient
 from .grpc_generated.app.proxyman.config_pb2 import ReceiverConfig
 from .grpc_generated.app.router.config_pb2 import RoutingRule
 from .grpc_generated.common.net.address_pb2 import IPOrDomain
@@ -45,6 +45,7 @@ class XrayClient(CoreClient):
             raise RuntimeError("Stop the service before starting it again")
         try:
             await self.process_manager.start()
+            assert self.process_manager.api_port is not None
             await self.grpc_client.connect(self.process_manager.api_port)
             await self._set_inbound("main", proxy_port)
             await self._set_inbound("test", test_port)
@@ -71,12 +72,20 @@ class XrayClient(CoreClient):
             return
         tag = f"{role}-in-{uuid4().hex}"
         old = self._inbounds.get(role)
-        await self.grpc_client.add_inbound(InboundHandlerConfig(
-            tag=tag, proxy_settings=typed_message(ServerConfig(udp_enabled=True, address=IPOrDomain(ip=b"\x7f\x00\x00\x01"))),
-            receiver_settings=typed_message(ReceiverConfig(
-                listen=IPOrDomain(ip=b"\x7f\x00\x00\x01"),
-                port_list=PortList(range=[PortRange(From=port, To=port)]))),
-        ))
+        await self.grpc_client.add_inbound(
+            InboundHandlerConfig(
+                tag=tag,
+                proxy_settings=typed_message(
+                    ServerConfig(udp_enabled=True, address=IPOrDomain(ip=b"\x7f\x00\x00\x01"))
+                ),
+                receiver_settings=typed_message(
+                    ReceiverConfig(
+                        listen=IPOrDomain(ip=b"\x7f\x00\x00\x01"),
+                        port_list=PortList(range=[PortRange(From=port, To=port)]),
+                    )
+                ),
+            )
+        )
         inbounds = {**self._inbounds, role: tag}
         try:
             await self._route(inbounds, self._outbounds)
@@ -94,6 +103,10 @@ class XrayClient(CoreClient):
     async def outbound_connect(self, server_id: str) -> None:
         self._require_started()
         await self._connect("main", server_id)
+
+    async def outbound_disconnect(self) -> None:
+        self._require_started()
+        await self._block("main")
 
     async def outbound_register(self, servers: list[OutboundServer]) -> None:
         self._require_started()
@@ -125,12 +138,17 @@ class XrayClient(CoreClient):
 
     async def test_stop(self) -> None:
         self._require_started()
-        outbounds = {role: tag for role, tag in self._outbounds.items() if role != "test"}
+        await self._block("test")
+
+    async def _block(self, role: str):
+        outbounds = {other: tag for other, tag in self._outbounds.items() if other != role}
         await self._route(self._inbounds, outbounds)
         self._outbounds = outbounds
 
     async def _route(self, inbounds: dict[str, str], outbounds: dict[str, str]):
-        await self.grpc_client.replace_rules([
-            RoutingRule(rule_tag=role, inbound_tag=[tag], tag=outbounds.get(role, "blocked"))
-            for role, tag in inbounds.items()
-        ])
+        await self.grpc_client.replace_rules(
+            [
+                RoutingRule(rule_tag=role, inbound_tag=[tag], tag=outbounds.get(role, "blocked"))
+                for role, tag in inbounds.items()
+            ]
+        )

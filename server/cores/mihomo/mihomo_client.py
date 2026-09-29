@@ -67,6 +67,10 @@ class MihomoClient(CoreClient):
         self._require_started()
         await self.rest_client.select_proxy("main", server_id)
 
+    async def outbound_disconnect(self) -> None:
+        self._require_started()
+        await self.rest_client.select_proxy("main", "REJECT")
+
     async def test_connect(self, server_id: str) -> None:
         self._require_started()
         await self.rest_client.select_proxy("test", server_id)

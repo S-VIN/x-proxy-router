@@ -19,6 +19,7 @@ from ..outbound_probe import (
     tcp_ping,
 )
 from ..tasks import long_task
+from .core import connect_best_outbound_server
 
 log = logging.getLogger(__name__)
 
@@ -121,6 +122,9 @@ async def test_outbound_servers(context: ApplicationContext) -> None:
 
     Filtered servers are skipped, except by_ping ones: they are checked again,
     so a server that answers the ping comes back.
+
+    With ServerSettings.auto_connect on, the best server by the new ratings is
+    connected at the end of the run (connect_best_outbound_server).
     """
     for server_id in [server.id for server in context.settings.outbound_server.get_all()]:
         server = context.settings.outbound_server.get_by_id(server_id)
@@ -130,3 +134,4 @@ async def test_outbound_servers(context: ApplicationContext) -> None:
             await test_outbound(context, server)
         except Exception:
             log.exception("Failed to check server %s", server_id)
+    await connect_best_outbound_server(context)

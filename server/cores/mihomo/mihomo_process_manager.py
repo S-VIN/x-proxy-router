@@ -3,16 +3,16 @@
 import asyncio
 import json
 import logging
-from pathlib import Path
 import secrets
 import socket
 import subprocess
 import sys
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from ..core_process_manager import CoreProcessManagerInterface
 from ...models import CoreState, CoreStatus, OperatingSystem
 from ...utils import detect_platform
+from ..core_process_manager import CoreProcessManagerInterface
 
 log = logging.getLogger(__name__)
 RESOURCES = Path(__file__).resolve().parents[3] / "resources" / "mihomo"
@@ -36,8 +36,12 @@ class MihomoProcessManager(CoreProcessManagerInterface):
     @property
     def binary_path(self) -> Path:
         system, arch = detect_platform()
-        return RESOURCES / system.value / arch.value / (
-            "mihomo.exe" if system is OperatingSystem.WINDOWS else "mihomo")
+        return (
+            RESOURCES
+            / system.value
+            / arch.value
+            / ("mihomo.exe" if system is OperatingSystem.WINDOWS else "mihomo")
+        )
 
     def status(self) -> CoreStatus:
         pid = self._process.pid if self._process and self._process.returncode is None else None
@@ -57,8 +61,7 @@ class MihomoProcessManager(CoreProcessManagerInterface):
             "listeners": [],
             "proxies": [],
             "proxy-groups": [
-                {"name": role, "type": "select", "proxies": ["REJECT"]}
-                for role in ("main", "test")
+                {"name": role, "type": "select", "proxies": ["REJECT"]} for role in ("main", "test")
             ],
             "rules": ["IN-NAME,main,main", "IN-NAME,test,test", "MATCH,REJECT"],
         }
@@ -77,21 +80,32 @@ class MihomoProcessManager(CoreProcessManagerInterface):
             path = Path(self._directory.name) / "config.json"
             path.write_text(json.dumps(self._generate_config()), encoding="utf-8")
             self._process = await asyncio.create_subprocess_exec(
-                str(self.binary_path), "-d", self._directory.name, "-f", str(path),
-                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+                str(self.binary_path),
+                "-d",
+                self._directory.name,
+                "-f",
+                str(path),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                **({"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}),
+                **(
+                    {"creationflags": subprocess.CREATE_NO_WINDOW}
+                    if sys.platform == "win32"
+                    else {}
+                ),
             )
-        except Exception:
+        except Exception as error:
             self._state = CoreState.FAILED
             self._last_error = "Cannot launch Mihomo"
             self._cleanup()
-            raise MihomoError(self._last_error) from None
+            raise MihomoError(self._last_error) from error
         self._state = CoreState.RUNNING
         self._task = asyncio.create_task(self._watch(), name="mihomo-monitor")
 
     async def _watch(self):
         process = self._process
+        # start() creates the process with stdout=PIPE before it starts this task.
+        assert process is not None and process.stdout is not None
         while chunk := await process.stdout.read(4096):
             log.info("Mihomo: %s", chunk.decode(errors="replace").rstrip())
         self._exit_code = await process.wait()

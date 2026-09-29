@@ -199,7 +199,8 @@ class ServerSettingsTests(unittest.TestCase):
         self.assertEqual(settings.subscription_refresh_interval, 86400)
         self.assertIsNone(settings.last_subscription_refresh)
         self.assertEqual(settings.outbound_tests, ())
-        self.assertEqual(self.rows(), [(0, 86400, None, "[]")])
+        self.assertIs(settings.auto_connect, False)
+        self.assertEqual(self.rows(), [(0, 86400, None, "[]", 0)])
 
     def test_save_replaces_the_row_and_persists_utc(self):
         moscow = timezone(timedelta(hours=3))
@@ -208,12 +209,14 @@ class ServerSettingsTests(unittest.TestCase):
             last_subscription_refresh=datetime(2026, 9, 26, 15, 30, tzinfo=moscow),
         )
         self.store.server_settings.save(changed)
-        self.store.server_settings.save(replace(changed, subscription_refresh_interval=600))
-        self.assertEqual(self.rows(), [(0, 600, "2026-09-26T12:30:00+00:00", "[]")])
+        changed = replace(changed, subscription_refresh_interval=600, auto_connect=True)
+        self.store.server_settings.save(changed)
+        self.assertEqual(self.rows(), [(0, 600, "2026-09-26T12:30:00+00:00", "[]", 1)])
         self.store.close()
         with SettingsStore() as reopened:
             loaded = reopened.server_settings.get()
-        self.assertEqual(loaded, replace(changed, subscription_refresh_interval=600))
+        self.assertEqual(loaded, changed)
+        self.assertIs(loaded.auto_connect, True)
         assert loaded.last_subscription_refresh is not None
         self.assertIs(loaded.last_subscription_refresh.tzinfo, UTC)
 
@@ -244,6 +247,25 @@ class ServerSettingsTests(unittest.TestCase):
         self.assertEqual(loaded.outbound_tests, tests)
         self.assertIs(loaded.outbound_tests[1].rule, OutboundTestRule.STATUS_BELOW_503)
 
+    def test_auto_connect_column_is_added_to_older_databases(self):
+        self.store.close()
+        with sqlite3.connect("settings.sqlite3") as connection:
+            connection.execute("DROP TABLE server_settings")
+            connection.execute(
+                "CREATE TABLE server_settings ("
+                "id INTEGER PRIMARY KEY NOT NULL CHECK (id = 0), "
+                "subscription_refresh_interval INTEGER NOT NULL, "
+                "last_subscription_refresh TEXT, "
+                "outbound_tests TEXT NOT NULL)"
+            )
+            connection.execute("INSERT INTO server_settings VALUES (0, 600, NULL, '[]')")
+        connection.close()
+        with SettingsStore() as reopened:
+            settings = reopened.server_settings.get()
+            self.assertEqual(settings, ServerSettings(subscription_refresh_interval=600))
+            reopened.server_settings.save(replace(settings, auto_connect=True))
+            self.assertIs(reopened.server_settings.get().auto_connect, True)
+
     def test_database_rejects_a_second_row(self):
         connection = sqlite3.connect("settings.sqlite3")
         self.addCleanup(connection.close)
@@ -259,6 +281,9 @@ class ServerSettingsTests(unittest.TestCase):
         for interval in (0, -1, 1.5, True):
             with self.assertRaises(ValueError):
                 ServerSettings(subscription_refresh_interval=interval)  # ty: ignore[invalid-argument-type]
+        for auto_connect in (1, "true", None):
+            with self.assertRaises(ValueError):
+                ServerSettings(auto_connect=auto_connect)  # ty: ignore[invalid-argument-type]
         with self.assertRaises(ValueError):
             ServerSettings(last_subscription_refresh=datetime(2026, 9, 26))  # noqa: DTZ001 - naive on purpose
         test = OutboundTest(url="https://example.com", alias="a", rule=OutboundTestRule.ANY_STATUS)

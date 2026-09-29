@@ -1,19 +1,18 @@
 """Small asynchronous Xray manager; lifecycle calls must be made sequentially."""
 
-from ..core_process_manager import CoreProcessManagerInterface
-
 import asyncio
 import json
 import logging
 import os
-from pathlib import Path
 import socket
 import subprocess
 import sys
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from ...models import CoreState, CoreStatus, OperatingSystem
 from ...utils import detect_platform
-from ...models import OperatingSystem, CoreState, CoreStatus
+from ..core_process_manager import CoreProcessManagerInterface
 
 log = logging.getLogger(__name__)
 RESOURCES = Path(__file__).resolve().parents[3] / "resources" / "xray"
@@ -75,7 +74,9 @@ class XrayProcessManager(CoreProcessManagerInterface):
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
                 listener.bind(("127.0.0.1", 0))
                 self.api_port = listener.getsockname()[1]
-            self._config.write_text(json.dumps(self._generate_config(), indent=2) + "\n", encoding="utf-8")
+            self._config.write_text(
+                json.dumps(self._generate_config(), indent=2) + "\n", encoding="utf-8"
+            )
             await self._launch()
         except Exception:
             self.api_port = None
@@ -98,13 +99,19 @@ class XrayProcessManager(CoreProcessManagerInterface):
         try:
             binary = self.binary_path
             self._process = await asyncio.create_subprocess_exec(
-                str(binary), "run", "-config", str(self._config),
+                str(binary),
+                "run",
+                "-config",
+                str(self._config),
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=dict(os.environ, XRAY_LOCATION_ASSET=str(binary.parent)),
-                **({"creationflags": subprocess.CREATE_NO_WINDOW}
-                   if OperatingSystem(sys.platform) is OperatingSystem.WINDOWS else {}),
+                **(
+                    {"creationflags": subprocess.CREATE_NO_WINDOW}
+                    if sys.platform == "win32"
+                    else {}
+                ),
             )
         except Exception as error:
             self._state = CoreState.FAILED
@@ -120,6 +127,8 @@ class XrayProcessManager(CoreProcessManagerInterface):
 
     async def _watch(self):
         process = self._process
+        # start() creates the process with stdout=PIPE before it starts this task.
+        assert process is not None and process.stdout is not None
         # Merge stdout/stderr and drain in this same task, including long lines.
         while chunk := await process.stdout.read(4096):
             log.info("Xray: %s", chunk.decode(errors="replace").rstrip())

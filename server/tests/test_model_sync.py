@@ -149,6 +149,7 @@ class SerializationTests(unittest.TestCase):
                 "subscription_refresh_interval": 60,
                 "last_subscription_refresh": "2026-09-26T12:00:00Z",
                 "outbound_tests": [],
+                "auto_connect": False,
             },
         )
         with self.assertRaises(ValueError):

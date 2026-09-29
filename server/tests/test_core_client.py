@@ -4,6 +4,8 @@ import unittest
 from copy import deepcopy
 from uuid import UUID
 
+import grpc
+
 from server.cores import CoreClient
 from server.cores.xray.grpc_generated.app.router.command.command_pb2 import RoutingContext
 from server.cores.xray.outbound_protobuf import build_outbound
@@ -25,8 +27,13 @@ def free_port():
 
 
 def server():
-    return OutboundServer(name="local", address="127.0.0.1", port=23456,
-                          protocol=OutboundProtocol.VLESS, vless_uuid=UUID(int=1))
+    return OutboundServer(
+        name="local",
+        address="127.0.0.1",
+        port=23456,
+        protocol=OutboundProtocol.VLESS,
+        vless_uuid=UUID(int=1),
+    )
 
 
 class CoreClientTests(unittest.IsolatedAsyncioTestCase):
@@ -57,8 +64,9 @@ class CoreClientTests(unittest.IsolatedAsyncioTestCase):
         await self.client.service_stop()
 
     async def route(self, role):
-        response = await self.client.grpc_client.test_route(RoutingContext(
-            InboundTag=self.client._inbounds[role], TargetDomain="example.com"))
+        response = await self.client.grpc_client.test_route(
+            RoutingContext(InboundTag=self.client._inbounds[role], TargetDomain="example.com")
+        )
         return response.OutboundTag
 
     async def handshake(self, port):
@@ -83,7 +91,7 @@ class CoreClientTests(unittest.IsolatedAsyncioTestCase):
         await c.outbound_connect(first.id)
         invalid = server()
         invalid.vless_encryption = "invalid"
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValueError):
             await c.outbound_register([invalid])
         self.assertEqual(await self.route("main"), first.id)
         self.assertEqual(await self.route("test"), "blocked")
@@ -94,6 +102,13 @@ class CoreClientTests(unittest.IsolatedAsyncioTestCase):
         await c.test_connect(first.id)
         self.assertEqual(await self.route("main"), second.id)
         await c.test_stop()
+        await c.test_stop()
+        await c.test_connect(first.id)
+        await c.outbound_disconnect()
+        self.assertEqual(await self.route("main"), "blocked")
+        self.assertEqual(await self.route("test"), first.id)
+        await c.outbound_connect(second.id)
+        self.assertEqual(await self.route("main"), second.id)
         await c.test_stop()
         self.assertEqual(len(await c.grpc_client.list_inbounds()), 2)
         self.assertEqual(len(await c.grpc_client.list_outbounds()), 3)
@@ -118,7 +133,8 @@ class CoreClientTests(unittest.IsolatedAsyncioTestCase):
         with socket.socket() as occupied:
             occupied.bind(("127.0.0.1", 0))
             occupied.listen()
-            with self.assertRaises(Exception):
+            # Xray cannot listen on the port and rejects the inbound over gRPC.
+            with self.assertRaises(grpc.RpcError):
                 await c.service_start(free_port(), occupied.getsockname()[1])
         self.assertEqual(c.process_manager.status().state, CoreState.STOPPED)
         await c.service_start(free_port(), free_port())
@@ -126,13 +142,27 @@ class CoreClientTests(unittest.IsolatedAsyncioTestCase):
         await self.handshake(c.test_port)
 
     async def test_compile_protocols_and_preserve_model(self):
-        cases = [server(), OutboundServer(name="ss", address="127.0.0.1", port=1234,
-                 protocol=OutboundProtocol.SHADOWSOCKS, shadowsocks_password="test",
-                 shadowsocks_method=ShadowsocksMethod.AES_128_GCM),
-                 OutboundServer(name="hy", address="127.0.0.1", port=1234,
-                 protocol=OutboundProtocol.HYSTERIA, hysteria_auth="test",
-                 transport=OutboundTransport.HYSTERIA,
-                 security=OutboundSecurity.TLS, server_name="example.com")]
+        cases = [
+            server(),
+            OutboundServer(
+                name="ss",
+                address="127.0.0.1",
+                port=1234,
+                protocol=OutboundProtocol.SHADOWSOCKS,
+                shadowsocks_password="test",
+                shadowsocks_method=ShadowsocksMethod.AES_128_GCM,
+            ),
+            OutboundServer(
+                name="hy",
+                address="127.0.0.1",
+                port=1234,
+                protocol=OutboundProtocol.HYSTERIA,
+                hysteria_auth="test",
+                transport=OutboundTransport.HYSTERIA,
+                security=OutboundSecurity.TLS,
+                server_name="example.com",
+            ),
+        ]
         for transport in (OutboundTransport.WS, OutboundTransport.GRPC, OutboundTransport.XHTTP):
             remote = server()
             remote.transport = transport

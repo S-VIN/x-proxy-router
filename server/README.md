@@ -22,7 +22,8 @@ uv run python -m server.main
 (`check_outbound_server_config` вызывает `ValueError`), пропускаются: в лог пишется
 предупреждение только с id сервера, остальные регистрируются. После регистрации
 тестовый маршрут заблокирован, а основной снова подключается к серверу с
-`is_connected` (см. «Подключение к серверу»). Если ядро не запустилось (например, порт занят),
+`is_connected`; в режиме `auto_connect` затем подключается лучший по рейтингу
+сервер (см. «Подключение к серверу»). Если ядро не запустилось (например, порт занят),
 приложение не запускается, а исключение выходит из `application()`.
 
 Регистрация идёт по сохранённым серверам и не ждёт обновления подписок.
@@ -100,6 +101,7 @@ from server.subscription_loader import SubscriptionError
 
 log = logging.getLogger(__name__)
 
+
 async def refresh(context: ApplicationContext) -> None:
     # Один хендлер вызывает другой как обычную функцию.
     try:
@@ -141,9 +143,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 context.scheduler.reschedule_job("my-job", IntervalTrigger(minutes=10))
 
 # Ежедневно в 09:30 UTC. Можно явно задать timezone="Europe/Moscow".
-context.scheduler.reschedule_job(
-    "my-job", CronTrigger(hour=9, minute=30, timezone=UTC)
-)
+context.scheduler.reschedule_job("my-job", CronTrigger(hour=9, minute=30, timezone=UTC))
 
 # Один раз через час; после выполнения задача удаляется из планировщика.
 context.scheduler.reschedule_job(
@@ -317,7 +317,7 @@ password: str | None = field(default=None, repr=False, metadata=SECRET)
 | `delete` | `subscription_link` | `{id}` | `{}` |
 | `add` | `reg_filter` | `{reg}` | `{id}` |
 | `delete` | `reg_filter` | `{id}` | `{}` |
-| `change` | `server_settings` | `{id: 0, subscription_refresh_interval?, outbound_tests?}` | `{}` |
+| `change` | `server_settings` | `{id: 0, subscription_refresh_interval?, outbound_tests?, auto_connect?}` | `{}` |
 | `request` | `refresh_subscriptions` | `{}` | `{}` после загрузки всех подписок |
 | `request` | `test_outbound_servers` | `{}` | `{}` после проверки всех серверов |
 | `request` | `connect_outbound_server` | `{id}` | `{}` после переключения ядра |
@@ -343,13 +343,19 @@ password: str | None = field(default=None, repr=False, metadata=SECRET)
 `is_connected` у нового и прежнего сервера до ответа. Сервера нет в БД — `not_found`;
 ядро не смогло переключиться (например, сервер не зарегистрирован из-за
 неподдерживаемых параметров) — `core_error` с `details.id`, прежнее подключение
-сохраняется. Сервер отфильтрован — `conflict` с `details.id`. Отключения нет:
-подключение только меняется на другой сервер.
+сохраняется. Сервер отфильтрован — `conflict` с `details.id`. Запроса на отключение
+нет: клиент только меняет сервер (отключает его фильтр по имени, раздел
+«Фильтрация серверов»). Удачный выбор клиента выключает
+`server_settings.auto_connect`: клиенты получают `server_settings` раньше
+`outbound_server`; при ошибке режим не меняется.
 
 `add` / `reg_filter` и `delete` / `reg_filter` добавляют и удаляют фильтр серверов
 по имени (`handlers/reg_filter.py`). До ответа клиенты получают `reg_filter`
 и `outbound_server` с серверами, у которых изменилось `filtered` (раздел
-«Фильтрация серверов»). Неверное выражение — `validation_error`, такое же уже
+«Фильтрация серверов»). Если под новый фильтр попал подключённый сервер, он
+отключается и `auto_connect` выключается: между ними приходит `server_settings`,
+если режим был включён, а в `outbound_server` у сервера сразу `is_connected: false`.
+Неверное выражение — `validation_error`, такое же уже
 есть — `conflict`, оба с `details.field = "reg"`. Изменения фильтра нет.
 
 `add` / `subscription_link` сначала дожидается идущего обновления (оно прочитало
@@ -367,6 +373,11 @@ password: str | None = field(default=None, repr=False, metadata=SECRET)
 неизвестное правило). Повторяющийся `alias` — `validation_error`.
 Результаты проверок серверов (`ping`, `speed`, `rating`, `tests`) клиенты
 не меняют: их записывает сервер.
+
+`auto_connect` в `change` / `server_settings` — `true` или `false`, другие типы
+дают `bad_request`. `true` включает автоподключение и до ответа подключает лучший
+сервер (раздел «Подключение к серверу»): клиенты получают `server_settings`, затем
+`outbound_server`. `false` только выключает режим.
 
 | code | когда |
 | --- | --- |
@@ -391,6 +402,7 @@ password: str | None = field(default=None, repr=False, metadata=SECRET)
 ```python
 from server.request_error import ErrorCode, RequestError, expect_fields, field_value
 
+
 async def delete_subscription_link(context, payload):
     expect_fields(payload, {"id"})  # обязательные и необязательные поля
     if not context.settings.subscription_link.delete(field_value(payload, "id", str)):
@@ -399,7 +411,7 @@ async def delete_subscription_link(context, payload):
     return {}
 ```
 
-`field_value(payload, name, str | int)` проверяет тип поля (`bool` не считается
+`field_value(payload, name, str | int | bool)` проверяет тип поля (`bool` не считается
 числом). Для вложенных объектов обе функции принимают `prefix`: с
 `prefix="outbound_tests[1]."` ошибка называет поле `outbound_tests[1].url`.
 `RequestError(code, message, details)` отправляется клиенту как есть,
@@ -411,7 +423,9 @@ async def delete_subscription_link(context, payload):
 ```python
 from functools import partial
 
-context.websocket.register("delete", "subscription_link", partial(delete_subscription_link, context))
+context.websocket.register(
+    "delete", "subscription_link", partial(delete_subscription_link, context)
+)
 ```
 
 Повторная регистрация той же пары вызывает `ValueError`. Из async-кода хендлер
@@ -444,9 +458,35 @@ context.websocket.register("delete", "subscription_link", partial(delete_subscri
   (ядро не поддерживает его параметры) или ядро не смогло к нему подключиться,
   флаг снимается и клиенты получают `outbound_server`. Так подключение
   восстанавливается при запуске приложения и после каждого обновления подписок.
+  Сервер, отфильтрованный по имени (например, в БД прежней версии), снова не
+  подключается: флаг снимается и `auto_connect` выключается.
+- `disconnect_filtered_server(context)` отключает подключённый сервер, если его
+  имя подходит под фильтр: `core_client.outbound_disconnect()` блокирует основной
+  маршрут, флаг `is_connected` снимается, `auto_connect` выключается, клиенты
+  получают `server_settings`, затем `outbound_server`. Ничего не подключено, пока
+  клиент не выберет сервер или не включит режим. Ошибка ядра пишется в лог, флаг
+  снимается всё равно. Сервер с `BY_PING` не отключается. Вызывается из
+  `add` / `reg_filter`.
+- `connect_best_outbound_server(context)` — автоподключение. Если
+  `ServerSettings.auto_connect` выключен, ничего не делает. Иначе подключает
+  лучший по `rating` сервер из неотфильтрованных с `rating` больше 0. Подключённый
+  сервер меняется, только если другой оценён выше, поэтому серверы с равным
+  рейтингом не сменяют друг друга; из равных лучших берётся первый по порядку в БД.
+  Подключённый сервер с `BY_PING` или непроверенный заменяется любым подходящим.
+  Если ядро не смогло подключиться, пробуется следующий сервер; ошибки только
+  пишутся в лог. Нет подходящего сервера — подключение не меняется.
+
+`connect_outbound_server` — выбор клиента: после удачного переключения он выключает
+`auto_connect` и рассылает `server_settings`, затем `outbound_server`. При ошибке
+режим не меняется. `connect_best_outbound_server` вызывается, когда клиент включает
+режим (`change` / `server_settings`), в конце прохода `test_outbound_servers`,
+после `refresh_subscriptions` (вслед за `register_outbound_servers`), после
+`delete` / `reg_filter` и при запуске приложения.
 
 Смены основного маршрута и регистрация идут по одной (`context.core_lock`), чтобы
 восстановление после регистрации не перебило подключение, выбранное клиентом.
+Автоподключение читает `auto_connect` уже под этим локом: если клиент выбрал
+сервер, пока оно ждало лока, режим уже выключен, и выбор клиента остаётся.
 
 ## Фильтрация серверов
 
@@ -473,10 +513,14 @@ context.websocket.register("delete", "subscription_link", partial(delete_subscri
   проверяют снова, чтобы сервер мог вернуться. Сервер перечитывается перед
   проверкой, поэтому фильтр, добавленный во время прохода, действует на оставшиеся.
 - `connect_outbound_server` для отфильтрованного сервера вызывает `ServerFiltered`.
-- В ядре регистрируются все серверы, в том числе отфильтрованные, и подключённый
-  сервер, попавший под фильтр, остаётся подключённым. Перерегистрация блокирует оба
-  маршрута ядра, поэтому изменение фильтров ядро не трогает: фильтр соблюдает
-  приложение.
+- В ядре регистрируются все серверы, в том числе отфильтрованные: перерегистрация
+  блокирует оба маршрута, поэтому изменение фильтров регистрацию не трогает, фильтр
+  соблюдает приложение.
+- Подключённый сервер, попавший под фильтр по имени, отключается в любом режиме
+  (`disconnect_filtered_server`): основной маршрут блокируется, `auto_connect`
+  выключается, и ничего не подключено. Удаление фильтра подключение не возвращает.
+- Подключённый сервер, получивший `BY_PING`, остаётся подключённым; в режиме
+  `auto_connect` его заменяет лучший сервер после прохода проверки.
 
 Выражения пользователь пишет сам, а `re` не ограничивает время поиска: выражение
 с катастрофическим перебором (например, `(a+)+$`) может надолго занять event loop
@@ -491,8 +535,10 @@ context.websocket.register("delete", "subscription_link", partial(delete_subscri
 ```python
 from ..tasks import long_task
 
+
 @long_task("test_outbound_servers", skip_while=["refresh_subscriptions"])
 async def test_outbound_servers(context: ApplicationContext) -> None: ...
+
 
 @long_task("refresh_subscriptions", cancels=["test_outbound_servers"])
 async def refresh_subscriptions(context: ApplicationContext) -> None: ...
@@ -512,9 +558,9 @@ async def refresh_subscriptions(context: ApplicationContext) -> None: ...
 
 ```python
 await context.tasks.cancel("test_outbound_servers")  # остановить и дождаться; нет задачи — ничего
-await context.tasks.wait("refresh_subscriptions")    # дождаться, чем бы она ни закончилась
-context.tasks.running("refresh_subscriptions")        # идёт ли сейчас
-await context.tasks.cancel_all()                     # при остановке приложения
+await context.tasks.wait("refresh_subscriptions")  # дождаться, чем бы она ни закончилась
+context.tasks.running("refresh_subscriptions")  # идёт ли сейчас
+await context.tasks.cancel_all()  # при остановке приложения
 ```
 
 Задача не может остановить сама себя (`RuntimeError`).
@@ -556,6 +602,7 @@ Python **3.11+**. Установка зависимостей: `python -m pip in
 ```python
 from server.cores.xray.xray_process_manager import xray
 from server.cores.xray.xray_grpc_client import XrayGrpcClient
+
 
 async def application():
     client = XrayGrpcClient()
@@ -680,12 +727,17 @@ from server.cores.xray.grpc_generated.proxy.freedom.config_pb2 import Config as 
 from server.cores.xray.grpc_generated.app.router.config_pb2 import RoutingRule
 
 # После await xray.start() и await client.connect(xray.api_port):
-await client.add_outbound(OutboundHandlerConfig(
-    tag="direct", proxy_settings=typed_message(FreedomConfig()),
-))
-await client.replace_rules([
-    RoutingRule(rule_tag="selected", inbound_tag=["socks"], tag="direct"),
-])
+await client.add_outbound(
+    OutboundHandlerConfig(
+        tag="direct",
+        proxy_settings=typed_message(FreedomConfig()),
+    )
+)
+await client.replace_rules(
+    [
+        RoutingRule(rule_tag="selected", inbound_tag=["socks"], tag="direct"),
+    ]
+)
 ```
 
 SOCKS inbound здесь предполагается уже добавленным. Готовые сборщики параметров
@@ -796,7 +848,9 @@ UUID и значения enum при импорте.
 
 `is_connected: bool` (по умолчанию `False`) — основной маршрут ядра идёт через этот
 сервер. `True` бывает не больше чем у одного сервера, это держит и уникальный индекс
-в БД. Меняет его только `connect_outbound_server`; обновление подписок сохраняет
+в БД. Меняют его функции `handlers/core.py`: `connect_outbound_server`, автоподключение
+(`connect_best_outbound_server`) и отключение фильтром (`disconnect_filtered_server`);
+обновление подписок сохраняет
 флаг у совпавшего профиля, а если сервер пропал из подписок, флаг пропадает вместе с ним.
 
 Все протокольные поля объявлены как `... | None = None`. При создании модель
@@ -812,7 +866,10 @@ UUID и значения enum при импорте.
 ```python
 from uuid import UUID
 from server.models import (
-    OutboundServer, OutboundProtocol, OutboundSecurity, VlessFlow,
+    OutboundServer,
+    OutboundProtocol,
+    OutboundSecurity,
+    VlessFlow,
 )
 
 server = OutboundServer(
@@ -848,6 +905,10 @@ Enum используют канонические значения; альте�
 - `outbound_tests: tuple[OutboundTest, ...]` — проверки, которые проходят
   outbound-серверы; по умолчанию пусто. `alias` не должны повторяться, иначе `ValueError`.
   Хранится кортежем, чтобы замороженная модель не менялась; клиентам уходит JSON-массив.
+- `auto_connect: bool` — режим автоподключения: сервер сам держит подключённым
+  лучший по рейтингу сервер (раздел «Подключение к серверу»). По умолчанию `False`;
+  не `bool` — `ValueError`. Выключается, когда клиент сам выбирает сервер и когда
+  подключённый сервер попадает под фильтр по имени.
 
 `OutboundTest` (`server/models/outbound_test.py`) — неизменяемое описание одной
 HTTP-проверки:
@@ -892,16 +953,16 @@ HTTP-проверки:
 создаётся вместе с таблицей, а `CHECK (id = 0)` не даёт добавить вторую
 даже из другого соединения. `get()` возвращает текущие настройки, `save(settings)`
 заменяет их. Время хранится как TEXT в ISO 8601 с `+00:00`, `outbound_tests` —
-в колонке `outbound_tests` как JSON-массив объектов `{url, alias, rule}`.
+в колонке `outbound_tests` как JSON-массив объектов `{url, alias, rule}`,
+`auto_connect` — INTEGER 0 или 1. В БД, созданную до появления `auto_connect`,
+колонка добавляется при открытии со значением 0.
 
 ```python
 from dataclasses import replace
 from datetime import UTC, datetime
 
 current = settings.server_settings.get()
-settings.server_settings.save(
-    replace(current, last_subscription_refresh=datetime.now(UTC))
-)
+settings.server_settings.save(replace(current, last_subscription_refresh=datetime.now(UTC)))
 await context.sync.notify("server_settings")  # в хендлере: разослать клиентам
 ```
 
@@ -1062,7 +1123,8 @@ inbound (`test_stop` в `finally`), её результаты не записы�
 Список id берётся в начале прохода: удалённый за это время сервер пропускается,
 изменённый проверяется с текущими параметрами из БД. Ошибка проверки одного сервера
 (например, он не зарегистрирован в ядре) пишется в лог с id сервера, проход
-продолжается.
+продолжается. В конце прохода `connect_best_outbound_server` в режиме
+`auto_connect` подключает лучший по новым рейтингам сервер.
 
 Условие вызова: ядро запущено и сервер в нём зарегистрирован. Приложение делает
 это на старте и после каждого обновления подписок. `test_connect` только переключает тестовый inbound
@@ -1158,6 +1220,8 @@ finally:
 - `test_stop` блокирует тестовый маршрут, сохраняя listener и серверы. Повторный
   `test_connect(id)` возобновляет маршрутизацию новых соединений. Уже открытые
   соединения не переносятся на другой сервер и не закрываются принудительно.
+- `outbound_disconnect` так же блокирует основной маршрут; `outbound_connect(id)`
+  снова его открывает.
 - Порты фиксируются при `service_start(proxy_port, test_port)`. Методы `change_port`
   и `test_start` удалены из интерфейса; смена портов выполняется остановкой и запуском.
 - Клиент управляет всей таблицей правил. Не изменяйте её параллельно через
