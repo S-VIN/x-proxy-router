@@ -10,10 +10,10 @@ from .grpc_generated.app.proxyman.command import command_pb2 as handlers
 from .grpc_generated.app.proxyman.command.command_pb2_grpc import HandlerServiceStub
 from .grpc_generated.app.router.command import command_pb2 as routing_messages
 from .grpc_generated.app.router.command.command_pb2_grpc import RoutingServiceStub
-from .grpc_generated.app.router.config_pb2 import Config as RouterConfig, RoutingRule
+from .grpc_generated.app.router.config_pb2 import Config as RouterConfig
+from .grpc_generated.app.router.config_pb2 import RoutingRule
 from .grpc_generated.common.serial.typed_message_pb2 import TypedMessage
 from .grpc_generated.core.config_pb2 import InboundHandlerConfig, OutboundHandlerConfig
-
 
 _GRPC_TIMEOUT = 5
 

@@ -1,7 +1,7 @@
 """Core-independent service control contract."""
 
-from abc import ABC, abstractmethod
 import re
+from abc import ABC, abstractmethod
 
 from ..models import OutboundServer
 

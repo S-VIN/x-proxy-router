@@ -3,16 +3,16 @@
 import asyncio
 import json
 import logging
-from pathlib import Path
 import secrets
 import socket
 import subprocess
 import sys
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from ..core_process_manager import CoreProcessManagerInterface
 from ...models import CoreState, CoreStatus, OperatingSystem
 from ...utils import detect_platform
+from ..core_process_manager import CoreProcessManagerInterface
 
 log = logging.getLogger(__name__)
 RESOURCES = Path(__file__).resolve().parents[3] / "resources" / "mihomo"
@@ -94,11 +94,11 @@ class MihomoProcessManager(CoreProcessManagerInterface):
                     else {}
                 ),
             )
-        except Exception:
+        except Exception as error:
             self._state = CoreState.FAILED
             self._last_error = "Cannot launch Mihomo"
             self._cleanup()
-            raise MihomoError(self._last_error) from None
+            raise MihomoError(self._last_error) from error
         self._state = CoreState.RUNNING
         self._task = asyncio.create_task(self._watch(), name="mihomo-monitor")
 

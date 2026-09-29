@@ -1,8 +1,8 @@
 """Thin asynchronous REST wrapper using the standard library."""
 
 import asyncio
-from http.client import HTTPConnection, HTTPException
 import json
+from http.client import HTTPConnection, HTTPException
 from urllib.parse import quote
 
 from .mihomo_process_manager import MihomoError

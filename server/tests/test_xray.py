@@ -24,9 +24,11 @@ class PlatformTests(unittest.TestCase):
                 self.assertIs(detected_arch, arch)
 
     def test_unsupported_32bit(self):
-        with patch("server.utils.platform.struct.calcsize", return_value=4):
-            with self.assertRaises(UnsupportedPlatformError):
-                detect_platform()
+        with (
+            patch("server.utils.platform.struct.calcsize", return_value=4),
+            self.assertRaises(UnsupportedPlatformError),
+        ):
+            detect_platform()
 
     def test_windows_emulated_process_architecture(self):
         with (
@@ -124,11 +126,13 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(path.exists())
 
     async def test_missing_binary(self):
-        with patch(
-            "server.cores.xray.xray_process_manager.RESOURCES", Path(self.temp.name) / "missing"
+        with (
+            patch(
+                "server.cores.xray.xray_process_manager.RESOURCES", Path(self.temp.name) / "missing"
+            ),
+            self.assertRaises(XrayError),
         ):
-            with self.assertRaises(XrayError):
-                await self.manager.start()
+            await self.manager.start()
         self.assertEqual(self.manager.status().state, CoreState.FAILED)
         self.assertIsNone(self.manager._config_dir)
         self.assertIsNone(self.manager.api_port)

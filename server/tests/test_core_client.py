@@ -4,6 +4,8 @@ import unittest
 from copy import deepcopy
 from uuid import UUID
 
+import grpc
+
 from server.cores import CoreClient
 from server.cores.xray.grpc_generated.app.router.command.command_pb2 import RoutingContext
 from server.cores.xray.outbound_protobuf import build_outbound
@@ -89,7 +91,7 @@ class CoreClientTests(unittest.IsolatedAsyncioTestCase):
         await c.outbound_connect(first.id)
         invalid = server()
         invalid.vless_encryption = "invalid"
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValueError):
             await c.outbound_register([invalid])
         self.assertEqual(await self.route("main"), first.id)
         self.assertEqual(await self.route("test"), "blocked")
@@ -131,7 +133,8 @@ class CoreClientTests(unittest.IsolatedAsyncioTestCase):
         with socket.socket() as occupied:
             occupied.bind(("127.0.0.1", 0))
             occupied.listen()
-            with self.assertRaises(Exception):
+            # Xray cannot listen on the port and rejects the inbound over gRPC.
+            with self.assertRaises(grpc.RpcError):
                 await c.service_start(free_port(), occupied.getsockname()[1])
         self.assertEqual(c.process_manager.status().state, CoreState.STOPPED)
         await c.service_start(free_port(), free_port())

@@ -5,9 +5,9 @@ import gzip
 import hashlib
 import io
 import json
+import zipfile
 from pathlib import Path
 from urllib.request import Request, urlopen
-import zipfile
 
 VERSION = "1.19.31"
 ROOT = Path(__file__).resolve().parents[1] / "resources" / "mihomo"

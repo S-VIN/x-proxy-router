@@ -2,8 +2,8 @@
 
 from uuid import uuid4
 
-from ..core_client import CoreClient
 from ...models import CoreState, OutboundServer
+from ..core_client import CoreClient
 from .grpc_generated.app.proxyman.config_pb2 import ReceiverConfig
 from .grpc_generated.app.router.config_pb2 import RoutingRule
 from .grpc_generated.common.net.address_pb2 import IPOrDomain

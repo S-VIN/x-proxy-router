@@ -1,19 +1,18 @@
 """Small asynchronous Xray manager; lifecycle calls must be made sequentially."""
 
-from ..core_process_manager import CoreProcessManagerInterface
-
 import asyncio
 import json
 import logging
 import os
-from pathlib import Path
 import socket
 import subprocess
 import sys
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from ...models import CoreState, CoreStatus, OperatingSystem
 from ...utils import detect_platform
-from ...models import OperatingSystem, CoreState, CoreStatus
+from ..core_process_manager import CoreProcessManagerInterface
 
 log = logging.getLogger(__name__)
 RESOURCES = Path(__file__).resolve().parents[3] / "resources" / "xray"

@@ -5,11 +5,11 @@ Usage: python scripts/generate_grpc.py [/path/to/Xray-core]
 
 import argparse
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.request import urlopen
 from zipfile import ZipFile
@@ -51,7 +51,9 @@ def generate(source: Path, temporary: Path, environment: dict):
         if name in files:
             return
         files.add(name)
-        for dependency in re.findall(r'^import "([^"]+)";', (source / name).read_text(), re.M):
+        for dependency in re.findall(
+            r'^import "([^"]+)";', (source / name).read_text(), re.MULTILINE
+        ):
             collect(dependency)
 
     for name in ROOTS:
@@ -74,7 +76,7 @@ def generate(source: Path, temporary: Path, environment: dict):
                 r"^from (app|common|core|proxy|transport)([.\w]*) import ",
                 r"from server.cores.xray.grpc_generated.\1\2 import ",
                 text,
-                flags=re.M,
+                flags=re.MULTILINE,
             )
             text = re.sub(
                 r"(BuildTopDescriptorsAndMessages\(DESCRIPTOR, ')([^']+)",

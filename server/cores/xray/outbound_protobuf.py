@@ -1,34 +1,34 @@
 """Build Xray outbound protobufs in memory (Xray 26.3.27 schema)."""
 
 import base64
+import re
 from copy import deepcopy
 from ipaddress import ip_address
-import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from google.protobuf.json_format import ParseDict, ParseError
 
 from ...models import OutboundServer
-from .outbound_config import outbound_config
-from .xray_grpc_client import typed_message
 from .grpc_generated.app.proxyman.config_pb2 import SenderConfig
 from .grpc_generated.common.net.address_pb2 import IPOrDomain
 from .grpc_generated.common.protocol.server_spec_pb2 import ServerEndpoint
 from .grpc_generated.common.protocol.user_pb2 import User
 from .grpc_generated.core.config_pb2 import OutboundHandlerConfig
-from .grpc_generated.proxy.vless.account_pb2 import Account
-from .grpc_generated.proxy.vless.outbound.config_pb2 import Config as VlessConfig
+from .grpc_generated.proxy.hysteria.config_pb2 import ClientConfig as HysteriaClient
 from .grpc_generated.proxy.shadowsocks import config_pb2 as ss
 from .grpc_generated.proxy.shadowsocks_2022.config_pb2 import ClientConfig as Shadowsocks2022
-from .grpc_generated.proxy.hysteria.config_pb2 import ClientConfig as HysteriaClient
+from .grpc_generated.proxy.vless.account_pb2 import Account
+from .grpc_generated.proxy.vless.outbound.config_pb2 import Config as VlessConfig
 from .grpc_generated.transport.internet import config_pb2 as internet
+from .grpc_generated.transport.internet.grpc.config_pb2 import Config as GrpcConfig
+from .grpc_generated.transport.internet.hysteria.config_pb2 import Config as HysteriaConfig
+from .grpc_generated.transport.internet.reality.config_pb2 import Config as RealityConfig
+from .grpc_generated.transport.internet.splithttp.config_pb2 import Config as XhttpConfig
 from .grpc_generated.transport.internet.tcp.config_pb2 import Config as TcpConfig
 from .grpc_generated.transport.internet.tls.config_pb2 import Config as TlsConfig
-from .grpc_generated.transport.internet.reality.config_pb2 import Config as RealityConfig
 from .grpc_generated.transport.internet.websocket.config_pb2 import Config as WsConfig
-from .grpc_generated.transport.internet.grpc.config_pb2 import Config as GrpcConfig
-from .grpc_generated.transport.internet.splithttp.config_pb2 import Config as XhttpConfig
-from .grpc_generated.transport.internet.hysteria.config_pb2 import Config as HysteriaConfig
+from .outbound_config import outbound_config
+from .xray_grpc_client import typed_message
 
 
 def _address(value):
@@ -107,17 +107,17 @@ def _xhttp(options):
     extra = options.pop("extra", None)
     if extra is not None:
         options = {**extra, **{k: options.get(k, "") for k in ("host", "path", "mode")}}
-    defaults = dict(
-        mode="auto",
-        xPaddingKey="x_padding",
-        xPaddingHeader="X-Padding",
-        xPaddingPlacement="queryInHeader",
-        xPaddingMethod="repeat-x",
-        uplinkHTTPMethod="POST",
-        sessionPlacement="path",
-        seqPlacement="path",
-        uplinkDataPlacement="auto",
-    )
+    defaults = {
+        "mode": "auto",
+        "xPaddingKey": "x_padding",
+        "xPaddingHeader": "X-Padding",
+        "xPaddingPlacement": "queryInHeader",
+        "xPaddingMethod": "repeat-x",
+        "uplinkHTTPMethod": "POST",
+        "sessionPlacement": "path",
+        "seqPlacement": "path",
+        "uplinkDataPlacement": "auto",
+    }
     for key, value in defaults.items():
         if not options.get(key):
             options[key] = value
