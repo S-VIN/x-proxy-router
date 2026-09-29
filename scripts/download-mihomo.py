@@ -14,10 +14,26 @@ ROOT = Path(__file__).resolve().parents[1] / "resources" / "mihomo"
 RELEASE = f"https://github.com/MetaCubeX/mihomo/releases/download/v{VERSION}"
 # Archive digests published by GitHub for this release.
 ASSETS = {
-    ("linux", "x64"): ("linux-amd64-compatible", "gz", "04cf9f09671704f839ddbee2e93069dc831a4123a75281e725d1d96ab9ac1afc"),
-    ("linux", "arm64"): ("linux-arm64", "gz", "9e0f11afbf38426b8bd88fdc594678f8161c57eccb4e1b77acb12b493904f1d4"),
-    ("win32", "x64"): ("windows-amd64-compatible", "zip", "93d14e9a13b49b2f2d256202d02cc8d14a7c4695edf084cae0f941986bc9c218"),
-    ("win32", "arm64"): ("windows-arm64", "zip", "68659624a38ae1dbc4e1b92f45d4dc75da0eaedd4d732b0a6f01a308da945792"),
+    ("linux", "x64"): (
+        "linux-amd64-compatible",
+        "gz",
+        "04cf9f09671704f839ddbee2e93069dc831a4123a75281e725d1d96ab9ac1afc",
+    ),
+    ("linux", "arm64"): (
+        "linux-arm64",
+        "gz",
+        "9e0f11afbf38426b8bd88fdc594678f8161c57eccb4e1b77acb12b493904f1d4",
+    ),
+    ("win32", "x64"): (
+        "windows-amd64-compatible",
+        "zip",
+        "93d14e9a13b49b2f2d256202d02cc8d14a7c4695edf084cae0f941986bc9c218",
+    ),
+    ("win32", "arm64"): (
+        "windows-arm64",
+        "zip",
+        "68659624a38ae1dbc4e1b92f45d4dc75da0eaedd4d732b0a6f01a308da945792",
+    ),
 }
 
 
@@ -28,7 +44,11 @@ def download(url):
 
 def main():
     ROOT.mkdir(parents=True, exist_ok=True)
-    manifest = {"version": VERSION, "repository": "https://github.com/MetaCubeX/mihomo", "binaries": []}
+    manifest = {
+        "version": VERSION,
+        "repository": "https://github.com/MetaCubeX/mihomo",
+        "binaries": [],
+    }
     for (system, arch), (platform, extension, digest) in ASSETS.items():
         asset = f"mihomo-{platform}-v{VERSION}.{extension}"
         url = f"{RELEASE}/{asset}"
@@ -52,12 +72,21 @@ def main():
         if system == "linux":
             temporary.chmod(0o755)
         temporary.replace(target)
-        record = {"os": system, "architecture": arch, "path": str(target.relative_to(ROOT)),
-                  "url": url, "archive_sha256": digest, "sha256": hashlib.sha256(binary).hexdigest()}
-        (directory / "checksums.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+        record = {
+            "os": system,
+            "architecture": arch,
+            "path": str(target.relative_to(ROOT)),
+            "url": url,
+            "archive_sha256": digest,
+            "sha256": hashlib.sha256(binary).hexdigest(),
+        }
+        (directory / "checksums.json").write_text(
+            json.dumps(record, indent=2) + "\n", encoding="utf-8"
+        )
         manifest["binaries"].append(record)
-    (ROOT / "LICENSE").write_bytes(download(
-        f"https://raw.githubusercontent.com/MetaCubeX/mihomo/v{VERSION}/LICENSE"))
+    (ROOT / "LICENSE").write_bytes(
+        download(f"https://raw.githubusercontent.com/MetaCubeX/mihomo/v{VERSION}/LICENSE")
+    )
     (ROOT / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(f"Installed Mihomo {VERSION} in {ROOT}")
 

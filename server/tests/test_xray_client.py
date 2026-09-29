@@ -34,16 +34,24 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         await self.client.connect(self.manager.api_port)
         client = self.client
         self.assertEqual([item.tag for item in await client.list_outbounds()], ["blocked"])
-        await client.add_outbound(OutboundHandlerConfig(
-            tag="direct", proxy_settings=typed_message(FreedomConfig())))
+        await client.add_outbound(
+            OutboundHandlerConfig(tag="direct", proxy_settings=typed_message(FreedomConfig()))
+        )
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
-        await client.add_inbound(InboundHandlerConfig(
-            tag="socks", proxy_settings=typed_message(ServerConfig()),
-            receiver_settings=typed_message(ReceiverConfig(
-                listen=IPOrDomain(ip=socket.inet_aton("127.0.0.1")),
-                port_list=PortList(range=[PortRange(From=port, To=port)])))))
+        await client.add_inbound(
+            InboundHandlerConfig(
+                tag="socks",
+                proxy_settings=typed_message(ServerConfig()),
+                receiver_settings=typed_message(
+                    ReceiverConfig(
+                        listen=IPOrDomain(ip=socket.inet_aton("127.0.0.1")),
+                        port_list=PortList(range=[PortRange(From=port, To=port)]),
+                    )
+                ),
+            )
+        )
         self.assertIn("socks", [item.tag for item in await client.list_inbounds()])
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
         try:
@@ -55,14 +63,26 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             writer.close()
             await writer.wait_closed()
 
-        await client.replace_rules([RoutingRule(rule_tag="selected", inbound_tag=["socks"], tag="direct")])
-        route = await client.test_route(RoutingContext(InboundTag="socks", TargetDomain="example.com"))
+        await client.replace_rules(
+            [RoutingRule(rule_tag="selected", inbound_tag=["socks"], tag="direct")]
+        )
+        route = await client.test_route(
+            RoutingContext(InboundTag="socks", TargetDomain="example.com")
+        )
         self.assertEqual(route.OutboundTag, "direct")
-        await client.replace_rules([RoutingRule(rule_tag="selected", inbound_tag=["socks"], tag="blocked")])
-        route = await client.test_route(RoutingContext(InboundTag="socks", TargetDomain="example.com"))
+        await client.replace_rules(
+            [RoutingRule(rule_tag="selected", inbound_tag=["socks"], tag="blocked")]
+        )
+        route = await client.test_route(
+            RoutingContext(InboundTag="socks", TargetDomain="example.com")
+        )
         self.assertEqual(route.OutboundTag, "blocked")
-        await client.append_rules([RoutingRule(rule_tag="extra", inbound_tag=["other"], tag="direct")])
-        self.assertEqual([rule.ruleTag for rule in await client.list_rules()], ["selected", "extra"])
+        await client.append_rules(
+            [RoutingRule(rule_tag="extra", inbound_tag=["other"], tag="direct")]
+        )
+        self.assertEqual(
+            [rule.ruleTag for rule in await client.list_rules()], ["selected", "extra"]
+        )
         await client.remove_rule("extra")
         await client.replace_rules([])
         self.assertEqual(await client.list_rules(), [])

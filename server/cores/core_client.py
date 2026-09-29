@@ -13,7 +13,18 @@ class CoreClient(ABC):
     @staticmethod
     def _validate_server_ids(servers: list[OutboundServer]) -> None:
         ids = [server.id for server in servers]
-        reserved = {"main", "test", "DIRECT", "REJECT", "REJECT-DROP", "PASS", "GLOBAL", "COMPATIBLE", "blocked", "api"}
+        reserved = {
+            "main",
+            "test",
+            "DIRECT",
+            "REJECT",
+            "REJECT-DROP",
+            "PASS",
+            "GLOBAL",
+            "COMPATIBLE",
+            "blocked",
+            "api",
+        }
         if len(set(ids)) != len(ids):
             raise ValueError("Duplicate server IDs")
         if any(not re.fullmatch(r"[A-Za-z0-9_-]+", value) or value in reserved for value in ids):
@@ -29,12 +40,10 @@ class CoreClient(ABC):
         ...
 
     @abstractmethod
-    async def service_start(self, proxy_port: int, test_port: int) -> None:
-        ...
+    async def service_start(self, proxy_port: int, test_port: int) -> None: ...
 
     @abstractmethod
-    async def service_stop(self) -> None:
-        ...
+    async def service_stop(self) -> None: ...
 
     @abstractmethod
     async def outbound_register(self, servers: list[OutboundServer]) -> None:
@@ -68,4 +77,3 @@ class CoreClient(ABC):
     async def test_stop(self) -> None:
         """Block new test traffic, keeping its listener and registrations."""
         ...
-

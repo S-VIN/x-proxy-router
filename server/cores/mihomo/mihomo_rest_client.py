@@ -40,8 +40,12 @@ class MihomoRestClient:
         # HTTPConnection bypasses environment HTTP proxies and does not follow redirects.
         connection = HTTPConnection("127.0.0.1", port, timeout=5)
         try:
-            connection.request(method, path, body=json.dumps(body) if body is not None else None,
-                               headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"})
+            connection.request(
+                method,
+                path,
+                body=json.dumps(body) if body is not None else None,
+                headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+            )
             response = connection.getresponse()
             data = response.read()
             if not 200 <= response.status < 300:

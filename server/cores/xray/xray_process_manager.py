@@ -75,7 +75,9 @@ class XrayProcessManager(CoreProcessManagerInterface):
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
                 listener.bind(("127.0.0.1", 0))
                 self.api_port = listener.getsockname()[1]
-            self._config.write_text(json.dumps(self._generate_config(), indent=2) + "\n", encoding="utf-8")
+            self._config.write_text(
+                json.dumps(self._generate_config(), indent=2) + "\n", encoding="utf-8"
+            )
             await self._launch()
         except Exception:
             self.api_port = None
@@ -98,13 +100,19 @@ class XrayProcessManager(CoreProcessManagerInterface):
         try:
             binary = self.binary_path
             self._process = await asyncio.create_subprocess_exec(
-                str(binary), "run", "-config", str(self._config),
+                str(binary),
+                "run",
+                "-config",
+                str(self._config),
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=dict(os.environ, XRAY_LOCATION_ASSET=str(binary.parent)),
-                **({"creationflags": subprocess.CREATE_NO_WINDOW}
-                   if OperatingSystem(sys.platform) is OperatingSystem.WINDOWS else {}),
+                **(
+                    {"creationflags": subprocess.CREATE_NO_WINDOW}
+                    if OperatingSystem(sys.platform) is OperatingSystem.WINDOWS
+                    else {}
+                ),
             )
         except Exception as error:
             self._state = CoreState.FAILED

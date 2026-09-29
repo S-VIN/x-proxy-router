@@ -36,8 +36,12 @@ class MihomoProcessManager(CoreProcessManagerInterface):
     @property
     def binary_path(self) -> Path:
         system, arch = detect_platform()
-        return RESOURCES / system.value / arch.value / (
-            "mihomo.exe" if system is OperatingSystem.WINDOWS else "mihomo")
+        return (
+            RESOURCES
+            / system.value
+            / arch.value
+            / ("mihomo.exe" if system is OperatingSystem.WINDOWS else "mihomo")
+        )
 
     def status(self) -> CoreStatus:
         pid = self._process.pid if self._process and self._process.returncode is None else None
@@ -57,8 +61,7 @@ class MihomoProcessManager(CoreProcessManagerInterface):
             "listeners": [],
             "proxies": [],
             "proxy-groups": [
-                {"name": role, "type": "select", "proxies": ["REJECT"]}
-                for role in ("main", "test")
+                {"name": role, "type": "select", "proxies": ["REJECT"]} for role in ("main", "test")
             ],
             "rules": ["IN-NAME,main,main", "IN-NAME,test,test", "MATCH,REJECT"],
         }
@@ -77,10 +80,19 @@ class MihomoProcessManager(CoreProcessManagerInterface):
             path = Path(self._directory.name) / "config.json"
             path.write_text(json.dumps(self._generate_config()), encoding="utf-8")
             self._process = await asyncio.create_subprocess_exec(
-                str(self.binary_path), "-d", self._directory.name, "-f", str(path),
-                stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+                str(self.binary_path),
+                "-d",
+                self._directory.name,
+                "-f",
+                str(path),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                **({"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}),
+                **(
+                    {"creationflags": subprocess.CREATE_NO_WINDOW}
+                    if sys.platform == "win32"
+                    else {}
+                ),
             )
         except Exception:
             self._state = CoreState.FAILED

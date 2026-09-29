@@ -101,6 +101,7 @@ from server.subscription_loader import SubscriptionError
 
 log = logging.getLogger(__name__)
 
+
 async def refresh(context: ApplicationContext) -> None:
     # Один хендлер вызывает другой как обычную функцию.
     try:
@@ -142,9 +143,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 context.scheduler.reschedule_job("my-job", IntervalTrigger(minutes=10))
 
 # Ежедневно в 09:30 UTC. Можно явно задать timezone="Europe/Moscow".
-context.scheduler.reschedule_job(
-    "my-job", CronTrigger(hour=9, minute=30, timezone=UTC)
-)
+context.scheduler.reschedule_job("my-job", CronTrigger(hour=9, minute=30, timezone=UTC))
 
 # Один раз через час; после выполнения задача удаляется из планировщика.
 context.scheduler.reschedule_job(
@@ -403,6 +402,7 @@ password: str | None = field(default=None, repr=False, metadata=SECRET)
 ```python
 from server.request_error import ErrorCode, RequestError, expect_fields, field_value
 
+
 async def delete_subscription_link(context, payload):
     expect_fields(payload, {"id"})  # обязательные и необязательные поля
     if not context.settings.subscription_link.delete(field_value(payload, "id", str)):
@@ -423,7 +423,9 @@ async def delete_subscription_link(context, payload):
 ```python
 from functools import partial
 
-context.websocket.register("delete", "subscription_link", partial(delete_subscription_link, context))
+context.websocket.register(
+    "delete", "subscription_link", partial(delete_subscription_link, context)
+)
 ```
 
 Повторная регистрация той же пары вызывает `ValueError`. Из async-кода хендлер
@@ -533,8 +535,10 @@ context.websocket.register("delete", "subscription_link", partial(delete_subscri
 ```python
 from ..tasks import long_task
 
+
 @long_task("test_outbound_servers", skip_while=["refresh_subscriptions"])
 async def test_outbound_servers(context: ApplicationContext) -> None: ...
+
 
 @long_task("refresh_subscriptions", cancels=["test_outbound_servers"])
 async def refresh_subscriptions(context: ApplicationContext) -> None: ...
@@ -554,9 +558,9 @@ async def refresh_subscriptions(context: ApplicationContext) -> None: ...
 
 ```python
 await context.tasks.cancel("test_outbound_servers")  # остановить и дождаться; нет задачи — ничего
-await context.tasks.wait("refresh_subscriptions")    # дождаться, чем бы она ни закончилась
-context.tasks.running("refresh_subscriptions")        # идёт ли сейчас
-await context.tasks.cancel_all()                     # при остановке приложения
+await context.tasks.wait("refresh_subscriptions")  # дождаться, чем бы она ни закончилась
+context.tasks.running("refresh_subscriptions")  # идёт ли сейчас
+await context.tasks.cancel_all()  # при остановке приложения
 ```
 
 Задача не может остановить сама себя (`RuntimeError`).
@@ -598,6 +602,7 @@ Python **3.11+**. Установка зависимостей: `python -m pip in
 ```python
 from server.cores.xray.xray_process_manager import xray
 from server.cores.xray.xray_grpc_client import XrayGrpcClient
+
 
 async def application():
     client = XrayGrpcClient()
@@ -722,12 +727,17 @@ from server.cores.xray.grpc_generated.proxy.freedom.config_pb2 import Config as 
 from server.cores.xray.grpc_generated.app.router.config_pb2 import RoutingRule
 
 # После await xray.start() и await client.connect(xray.api_port):
-await client.add_outbound(OutboundHandlerConfig(
-    tag="direct", proxy_settings=typed_message(FreedomConfig()),
-))
-await client.replace_rules([
-    RoutingRule(rule_tag="selected", inbound_tag=["socks"], tag="direct"),
-])
+await client.add_outbound(
+    OutboundHandlerConfig(
+        tag="direct",
+        proxy_settings=typed_message(FreedomConfig()),
+    )
+)
+await client.replace_rules(
+    [
+        RoutingRule(rule_tag="selected", inbound_tag=["socks"], tag="direct"),
+    ]
+)
 ```
 
 SOCKS inbound здесь предполагается уже добавленным. Готовые сборщики параметров
@@ -856,7 +866,10 @@ UUID и значения enum при импорте.
 ```python
 from uuid import UUID
 from server.models import (
-    OutboundServer, OutboundProtocol, OutboundSecurity, VlessFlow,
+    OutboundServer,
+    OutboundProtocol,
+    OutboundSecurity,
+    VlessFlow,
 )
 
 server = OutboundServer(
@@ -949,9 +962,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 current = settings.server_settings.get()
-settings.server_settings.save(
-    replace(current, last_subscription_refresh=datetime.now(UTC))
-)
+settings.server_settings.save(replace(current, last_subscription_refresh=datetime.now(UTC)))
 await context.sync.notify("server_settings")  # в хендлере: разослать клиентам
 ```
 

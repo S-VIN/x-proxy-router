@@ -25,8 +25,13 @@ def free_port():
 
 
 def server():
-    return OutboundServer(name="local", address="127.0.0.1", port=23456,
-                          protocol=OutboundProtocol.VLESS, vless_uuid=UUID(int=1))
+    return OutboundServer(
+        name="local",
+        address="127.0.0.1",
+        port=23456,
+        protocol=OutboundProtocol.VLESS,
+        vless_uuid=UUID(int=1),
+    )
 
 
 class CoreClientTests(unittest.IsolatedAsyncioTestCase):
@@ -57,8 +62,9 @@ class CoreClientTests(unittest.IsolatedAsyncioTestCase):
         await self.client.service_stop()
 
     async def route(self, role):
-        response = await self.client.grpc_client.test_route(RoutingContext(
-            InboundTag=self.client._inbounds[role], TargetDomain="example.com"))
+        response = await self.client.grpc_client.test_route(
+            RoutingContext(InboundTag=self.client._inbounds[role], TargetDomain="example.com")
+        )
         return response.OutboundTag
 
     async def handshake(self, port):
@@ -133,13 +139,27 @@ class CoreClientTests(unittest.IsolatedAsyncioTestCase):
         await self.handshake(c.test_port)
 
     async def test_compile_protocols_and_preserve_model(self):
-        cases = [server(), OutboundServer(name="ss", address="127.0.0.1", port=1234,
-                 protocol=OutboundProtocol.SHADOWSOCKS, shadowsocks_password="test",
-                 shadowsocks_method=ShadowsocksMethod.AES_128_GCM),
-                 OutboundServer(name="hy", address="127.0.0.1", port=1234,
-                 protocol=OutboundProtocol.HYSTERIA, hysteria_auth="test",
-                 transport=OutboundTransport.HYSTERIA,
-                 security=OutboundSecurity.TLS, server_name="example.com")]
+        cases = [
+            server(),
+            OutboundServer(
+                name="ss",
+                address="127.0.0.1",
+                port=1234,
+                protocol=OutboundProtocol.SHADOWSOCKS,
+                shadowsocks_password="test",
+                shadowsocks_method=ShadowsocksMethod.AES_128_GCM,
+            ),
+            OutboundServer(
+                name="hy",
+                address="127.0.0.1",
+                port=1234,
+                protocol=OutboundProtocol.HYSTERIA,
+                hysteria_auth="test",
+                transport=OutboundTransport.HYSTERIA,
+                security=OutboundSecurity.TLS,
+                server_name="example.com",
+            ),
+        ]
         for transport in (OutboundTransport.WS, OutboundTransport.GRPC, OutboundTransport.XHTTP):
             remote = server()
             remote.transport = transport

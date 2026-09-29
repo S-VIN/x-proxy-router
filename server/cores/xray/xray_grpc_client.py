@@ -17,6 +17,7 @@ from .grpc_generated.core.config_pb2 import InboundHandlerConfig, OutboundHandle
 
 _GRPC_TIMEOUT = 5
 
+
 def typed_message(message: Message) -> TypedMessage:
     """Pack a protobuf config into Xray's TypedMessage (not protobuf Any)."""
     return TypedMessage(type=message.DESCRIPTOR.full_name, value=message.SerializeToString())
@@ -34,7 +35,8 @@ class XrayGrpcClient:
         """Open a loopback connection and wait for gRPC readiness."""
         await self.close()
         self._channel = grpc.aio.insecure_channel(
-            f"127.0.0.1:{port}", options=(("grpc.enable_http_proxy", 0),),
+            f"127.0.0.1:{port}",
+            options=(("grpc.enable_http_proxy", 0),),
         )
         try:
             async with asyncio.timeout(_GRPC_TIMEOUT):
@@ -64,23 +66,35 @@ class XrayGrpcClient:
         return self._routing
 
     async def add_inbound(self, config: InboundHandlerConfig) -> None:
-        await self.handlers.AddInbound(handlers.AddInboundRequest(inbound=config), timeout=_GRPC_TIMEOUT)
+        await self.handlers.AddInbound(
+            handlers.AddInboundRequest(inbound=config), timeout=_GRPC_TIMEOUT
+        )
 
     async def remove_inbound(self, tag: str) -> None:
-        await self.handlers.RemoveInbound(handlers.RemoveInboundRequest(tag=tag), timeout=_GRPC_TIMEOUT)
+        await self.handlers.RemoveInbound(
+            handlers.RemoveInboundRequest(tag=tag), timeout=_GRPC_TIMEOUT
+        )
 
     async def list_inbounds(self) -> list[InboundHandlerConfig]:
-        response = await self.handlers.ListInbounds(handlers.ListInboundsRequest(), timeout=_GRPC_TIMEOUT)
+        response = await self.handlers.ListInbounds(
+            handlers.ListInboundsRequest(), timeout=_GRPC_TIMEOUT
+        )
         return list(response.inbounds)
 
     async def add_outbound(self, config: OutboundHandlerConfig) -> None:
-        await self.handlers.AddOutbound(handlers.AddOutboundRequest(outbound=config), timeout=_GRPC_TIMEOUT)
+        await self.handlers.AddOutbound(
+            handlers.AddOutboundRequest(outbound=config), timeout=_GRPC_TIMEOUT
+        )
 
     async def remove_outbound(self, tag: str) -> None:
-        await self.handlers.RemoveOutbound(handlers.RemoveOutboundRequest(tag=tag), timeout=_GRPC_TIMEOUT)
+        await self.handlers.RemoveOutbound(
+            handlers.RemoveOutboundRequest(tag=tag), timeout=_GRPC_TIMEOUT
+        )
 
     async def list_outbounds(self) -> list[OutboundHandlerConfig]:
-        response = await self.handlers.ListOutbounds(handlers.ListOutboundsRequest(), timeout=_GRPC_TIMEOUT)
+        response = await self.handlers.ListOutbounds(
+            handlers.ListOutboundsRequest(), timeout=_GRPC_TIMEOUT
+        )
         return list(response.outbounds)
 
     async def replace_rules(self, rules: Sequence[RoutingRule]) -> None:
@@ -91,19 +105,30 @@ class XrayGrpcClient:
         await self._set_rules(rules, append=True)
 
     async def _set_rules(self, rules: Sequence[RoutingRule], append: bool):
-        await self.routing.AddRule(routing_messages.AddRuleRequest(
-            config=typed_message(RouterConfig(rule=rules)), shouldAppend=append,
-        ), timeout=_GRPC_TIMEOUT)
+        await self.routing.AddRule(
+            routing_messages.AddRuleRequest(
+                config=typed_message(RouterConfig(rule=rules)),
+                shouldAppend=append,
+            ),
+            timeout=_GRPC_TIMEOUT,
+        )
 
     async def remove_rule(self, tag: str) -> None:
-        await self.routing.RemoveRule(routing_messages.RemoveRuleRequest(ruleTag=tag), timeout=_GRPC_TIMEOUT)
+        await self.routing.RemoveRule(
+            routing_messages.RemoveRuleRequest(ruleTag=tag), timeout=_GRPC_TIMEOUT
+        )
 
     async def list_rules(self) -> list[routing_messages.ListRuleItem]:
         """Return rule tags and outbound tags, not full rule conditions."""
-        response = await self.routing.ListRule(routing_messages.ListRuleRequest(), timeout=_GRPC_TIMEOUT)
+        response = await self.routing.ListRule(
+            routing_messages.ListRuleRequest(), timeout=_GRPC_TIMEOUT
+        )
         return list(response.rules)
 
-    async def test_route(self, context: routing_messages.RoutingContext) -> routing_messages.RoutingContext:
+    async def test_route(
+        self, context: routing_messages.RoutingContext
+    ) -> routing_messages.RoutingContext:
         return await self.routing.TestRoute(
-            routing_messages.TestRouteRequest(RoutingContext=context), timeout=_GRPC_TIMEOUT,
+            routing_messages.TestRouteRequest(RoutingContext=context),
+            timeout=_GRPC_TIMEOUT,
         )

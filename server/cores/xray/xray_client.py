@@ -71,12 +71,20 @@ class XrayClient(CoreClient):
             return
         tag = f"{role}-in-{uuid4().hex}"
         old = self._inbounds.get(role)
-        await self.grpc_client.add_inbound(InboundHandlerConfig(
-            tag=tag, proxy_settings=typed_message(ServerConfig(udp_enabled=True, address=IPOrDomain(ip=b"\x7f\x00\x00\x01"))),
-            receiver_settings=typed_message(ReceiverConfig(
-                listen=IPOrDomain(ip=b"\x7f\x00\x00\x01"),
-                port_list=PortList(range=[PortRange(From=port, To=port)]))),
-        ))
+        await self.grpc_client.add_inbound(
+            InboundHandlerConfig(
+                tag=tag,
+                proxy_settings=typed_message(
+                    ServerConfig(udp_enabled=True, address=IPOrDomain(ip=b"\x7f\x00\x00\x01"))
+                ),
+                receiver_settings=typed_message(
+                    ReceiverConfig(
+                        listen=IPOrDomain(ip=b"\x7f\x00\x00\x01"),
+                        port_list=PortList(range=[PortRange(From=port, To=port)]),
+                    )
+                ),
+            )
+        )
         inbounds = {**self._inbounds, role: tag}
         try:
             await self._route(inbounds, self._outbounds)
@@ -137,7 +145,9 @@ class XrayClient(CoreClient):
         self._outbounds = outbounds
 
     async def _route(self, inbounds: dict[str, str], outbounds: dict[str, str]):
-        await self.grpc_client.replace_rules([
-            RoutingRule(rule_tag=role, inbound_tag=[tag], tag=outbounds.get(role, "blocked"))
-            for role, tag in inbounds.items()
-        ])
+        await self.grpc_client.replace_rules(
+            [
+                RoutingRule(rule_tag=role, inbound_tag=[tag], tag=outbounds.get(role, "blocked"))
+                for role, tag in inbounds.items()
+            ]
+        )

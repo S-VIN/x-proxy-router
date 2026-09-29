@@ -24,9 +24,14 @@ def detect_platform() -> tuple[OperatingSystem, Architecture]:
     # PROCESSOR_ARCHITECTURE describes the process environment instead.
     if system is OperatingSystem.WINDOWS:
         import os
+
         machine = os.environ.get("PROCESSOR_ARCHITECTURE", machine).lower()
-    aliases = {"amd64": Architecture.X64, "x86_64": Architecture.X64,
-               "arm64": Architecture.ARM64, "aarch64": Architecture.ARM64}
+    aliases = {
+        "amd64": Architecture.X64,
+        "x86_64": Architecture.X64,
+        "arm64": Architecture.ARM64,
+        "aarch64": Architecture.ARM64,
+    }
     try:
         return system, aliases[machine]
     except KeyError:

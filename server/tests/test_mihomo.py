@@ -25,16 +25,25 @@ def free_port():
 
 
 def remote(port=12345):
-    return OutboundServer(name="sample", address="127.0.0.1", port=port,
-                          protocol=OutboundProtocol.VLESS, vless_uuid=UUID(int=1))
+    return OutboundServer(
+        name="sample",
+        address="127.0.0.1",
+        port=port,
+        protocol=OutboundProtocol.VLESS,
+        vless_uuid=UUID(int=1),
+    )
 
 
 class MihomoConfigTests(unittest.TestCase):
     def test_translation_and_no_mutation(self):
         model = remote()
         model.transport = OutboundTransport.XHTTP
-        model.stream_options = {"xhttpSettings": {"path": "/proxy", "extra": {
-            "scMaxEachPostBytes": 1000000, "xmux": {"maxConcurrency": "8-16"}}}}
+        model.stream_options = {
+            "xhttpSettings": {
+                "path": "/proxy",
+                "extra": {"scMaxEachPostBytes": 1000000, "xmux": {"maxConcurrency": "8-16"}},
+            }
+        }
         before = deepcopy(model)
         config = outbound_config(model, "out")
         self.assertEqual(config["xhttp-opts"]["path"], "/proxy")
@@ -88,12 +97,15 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_commands_do_not_read_or_cache_configuration(self):
         from unittest.mock import patch
+
         c = self.client
         await c.service_start(free_port(), free_port())
         request = c.rest_client.request
+
         async def command_only(method, path, body=None):
             self.assertNotEqual(method, "GET")
             return await request(method, path, body)
+
         with patch.object(c.rest_client, "request", side_effect=command_only):
             first, second = remote(), remote()
             await c.outbound_register([first, second])
@@ -101,7 +113,9 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await c.test_connect(second.id)
             await c.test_stop()
             await c.outbound_delete_all()
-        self.assertEqual(set(vars(c)), {"process_manager", "rest_client", "proxy_port", "test_port"})
+        self.assertEqual(
+            set(vars(c)), {"process_manager", "rest_client", "proxy_port", "test_port"}
+        )
         self.assertFalse(hasattr(c.process_manager, "config"))
 
     async def asyncSetUp(self):
@@ -141,6 +155,7 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 pass
             finally:
                 writer.close()
+
         listener = await asyncio.start_server(handle, "127.0.0.1", 0)
         self.listeners.append(listener)
         return remote(listener.sockets[0].getsockname()[1])
@@ -205,6 +220,7 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_udp_routes_are_independent(self):
         loop = asyncio.get_running_loop()
+
         async def endpoint(label):
             class Echo(asyncio.DatagramProtocol):
                 def connection_made(self, transport):
@@ -213,11 +229,17 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 def datagram_received(self, data, address):
                     # Plain Shadowsocks UDP: IPv4 destination header followed by payload.
                     self.transport.sendto(data[:7] + label + data[7:], address)
+
             transport, _ = await loop.create_datagram_endpoint(Echo, local_addr=("127.0.0.1", 0))
             self.datagrams.append(transport)
-            return OutboundServer(name="udp", address="127.0.0.1", port=transport.get_extra_info("sockname")[1],
-                                  protocol=OutboundProtocol.SHADOWSOCKS, shadowsocks_password="",
-                                  shadowsocks_method=ShadowsocksMethod.NONE)
+            return OutboundServer(
+                name="udp",
+                address="127.0.0.1",
+                port=transport.get_extra_info("sockname")[1],
+                protocol=OutboundProtocol.SHADOWSOCKS,
+                shadowsocks_password="",
+                shadowsocks_method=ShadowsocksMethod.NONE,
+            )
 
         c = self.client
         first, second = await endpoint(b"main:"), await endpoint(b"test:")
@@ -273,13 +295,26 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_core_accepts_supported_protocols(self):
         c = self.client
         await c.service_start(free_port(), free_port())
-        cases = [remote(), OutboundServer(name="ss", address="127.0.0.1", port=12345,
-                 protocol=OutboundProtocol.SHADOWSOCKS, shadowsocks_password="sample",
-                 shadowsocks_method=ShadowsocksMethod.AES_128_GCM),
-                 OutboundServer(name="hy2", address="127.0.0.1", port=12345,
-                 protocol=OutboundProtocol.HYSTERIA, hysteria_auth="sample",
-                 transport=OutboundTransport.HYSTERIA,
-                 security=OutboundSecurity.TLS)]
+        cases = [
+            remote(),
+            OutboundServer(
+                name="ss",
+                address="127.0.0.1",
+                port=12345,
+                protocol=OutboundProtocol.SHADOWSOCKS,
+                shadowsocks_password="sample",
+                shadowsocks_method=ShadowsocksMethod.AES_128_GCM,
+            ),
+            OutboundServer(
+                name="hy2",
+                address="127.0.0.1",
+                port=12345,
+                protocol=OutboundProtocol.HYSTERIA,
+                hysteria_auth="sample",
+                transport=OutboundTransport.HYSTERIA,
+                security=OutboundSecurity.TLS,
+            ),
+        ]
         for transport in (OutboundTransport.WS, OutboundTransport.GRPC, OutboundTransport.XHTTP):
             model = remote()
             model.transport = transport
@@ -302,9 +337,16 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
         c = self.client
         await c.service_start(free_port(), free_port())
         from server.cores.mihomo.mihomo_rest_client import MihomoRestClient
+
         with self.assertRaises(MihomoError):
-            await asyncio.to_thread(MihomoRestClient._request, c.process_manager.api_port,
-                                    "incorrect", "GET", "/version", None)
+            await asyncio.to_thread(
+                MihomoRestClient._request,
+                c.process_manager.api_port,
+                "incorrect",
+                "GET",
+                "/version",
+                None,
+            )
         c.process_manager._process.kill()
         await c.process_manager._task
         self.assertEqual(c.process_manager.status().state, CoreState.FAILED)
