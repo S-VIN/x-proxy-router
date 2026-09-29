@@ -1,9 +1,11 @@
 import asyncio
 import json
 import socket
+import ssl
 import unittest
 from contextlib import chdir
 from dataclasses import replace
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
 from uuid import UUID
@@ -31,6 +33,9 @@ from server.models.application_context import ApplicationContext
 from server.tasks import TaskCancelled
 from server.tests.support import startup_finished
 from server.tests.test_model_sync import Client
+
+# Self-signed certificate and key for localhost, valid until 2126.
+CERTIFICATE = Path(__file__).with_name("localhost.pem")
 
 
 def free_port() -> int:
@@ -62,6 +67,43 @@ def hysteria() -> OutboundServer:
 
 def outbound_test(alias: str, url: str, rule: OutboundTestRule) -> OutboundTest:
     return OutboundTest(url=url, alias=alias, rule=rule)
+
+
+async def pipe(source: asyncio.StreamReader, destination: asyncio.StreamWriter) -> None:
+    try:
+        while data := await source.read(65536):
+            destination.write(data)
+            await destination.drain()
+    except ConnectionError:
+        pass
+    finally:
+        destination.close()
+
+
+class ListenerTestCase(unittest.IsolatedAsyncioTestCase):
+    """Local servers whose connections are closed after each test."""
+
+    async def asyncSetUp(self):
+        self.writers: list[asyncio.StreamWriter] = []
+
+    async def asyncTearDown(self):
+        for writer in self.writers:
+            writer.close()
+
+    async def listen(self, handle, **options) -> int:
+        async def tracked(reader, writer):
+            self.writers.append(writer)
+            try:
+                await handle(reader, writer)
+            except (asyncio.IncompleteReadError, ConnectionError):
+                pass
+            finally:
+                writer.close()
+
+        listener = await asyncio.start_server(tracked, "127.0.0.1", 0, **options)
+        self.addAsyncCleanup(listener.wait_closed)
+        self.addCleanup(listener.close)
+        return listener.sockets[0].getsockname()[1]
 
 
 class RatingTests(unittest.TestCase):
@@ -107,12 +149,136 @@ class PingTests(unittest.IsolatedAsyncioTestCase):
             attempts += 1
             await asyncio.sleep(1)
 
+        loop = asyncio.get_running_loop()
+        started = loop.time()
         with (
             patch("server.outbound_probe.PING_LIMIT", 0.05),
             patch("server.outbound_probe.asyncio.open_connection", slow),
         ):
             self.assertIsNone(await handler.tcp_ping("127.0.0.1", 1))
-        self.assertEqual(attempts, 3)
+        # The limit covers the whole ping: the first slow attempt uses it up.
+        self.assertEqual(attempts, 1)
+        self.assertLess(loop.time() - started, 0.5)
+
+    async def test_name_resolution_counts_towards_the_limit(self):
+        listener = await asyncio.start_server(lambda r, w: w.close(), "127.0.0.1", 0)
+        self.addAsyncCleanup(listener.wait_closed)
+        self.addCleanup(listener.close)
+        port = listener.sockets[0].getsockname()[1]
+        loop = asyncio.get_running_loop()
+        resolve = loop.getaddrinfo
+
+        async def slow_resolve(*args, **kwargs):
+            await asyncio.sleep(0.1)
+            return await resolve(*args, **kwargs)
+
+        with (
+            patch("server.outbound_probe.PING_LIMIT", 0.05),
+            patch.object(loop, "getaddrinfo", slow_resolve),
+        ):
+            self.assertIsNone(await handler.tcp_ping("127.0.0.1", port))
+
+
+class SpeedTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.enterContext(patch("server.outbound_probe.SPEED_TEST_DURATION", 0.2))
+
+    async def serve(self, handle) -> None:
+        listener = await asyncio.start_server(handle, "127.0.0.1", 0)
+        self.addAsyncCleanup(listener.wait_closed)
+        self.addCleanup(listener.close)
+        port = listener.sockets[0].getsockname()[1]
+        self.enterContext(
+            patch("server.outbound_probe.SPEED_TEST_URL", f"http://127.0.0.1:{port}/")
+        )
+
+    async def measure(self) -> tuple[int, float]:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        async with ClientSession() as session:
+            speed = await handler.download_speed(session)
+        return speed, loop.time() - started
+
+    async def test_deadline_covers_headers_and_download(self):
+        async def trickle(reader, writer):
+            await reader.readuntil(b"\r\n\r\n")
+            await asyncio.sleep(0.1)  # Slow headers take their share of the time.
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\n")
+            while not writer.is_closing():
+                writer.write(b"x" * 100)
+                await asyncio.sleep(0.01)
+            writer.close()
+
+        await self.serve(trickle)
+        speed, elapsed = await self.measure()
+        self.assertGreater(speed, 0)
+        self.assertLess(elapsed, 0.4)
+
+    async def test_no_headers_before_the_deadline(self):
+        async def hang(reader, writer):
+            await reader.read()  # Until the client gives up and closes the connection.
+            writer.close()
+
+        await self.serve(hang)
+        speed, elapsed = await self.measure()
+        self.assertEqual(speed, 0)
+        self.assertLess(elapsed, 0.4)
+
+
+class ProxySessionTests(ListenerTestCase):
+    """HTTPS through a stub SOCKS5 endpoint that, like Mihomo's, confirms a
+    connection before the server behind it answers."""
+
+    async def endpoint(self, *, relay: bool) -> int:
+        """Relay to 127.0.0.1 at the requested port, or confirm and stay silent."""
+
+        async def handle(reader, writer):
+            await reader.readexactly(3)  # Version 5, one method: no authentication.
+            writer.write(b"\x05\x00")
+            request = await reader.readexactly(5)  # Version, CONNECT, 0, host name, its length.
+            await reader.readexactly(request[4])
+            port = int.from_bytes(await reader.readexactly(2))
+            writer.write(b"\x05\x00\x00\x01" + bytes(6))  # Connected.
+            if not relay:
+                await reader.read()  # Until the client gives up and closes the connection.
+                return
+            target_reader, target_writer = await asyncio.open_connection("127.0.0.1", port)
+            self.writers.append(target_writer)
+            await asyncio.gather(pipe(reader, target_writer), pipe(target_reader, writer))
+
+        return await self.listen(handle)
+
+    async def test_https_through_the_endpoint(self):
+        async def https(reader, writer):
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+            await writer.drain()
+
+        server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server_context.load_cert_chain(CERTIFICATE)
+        port = await self.listen(https, ssl=server_context)
+        # The certificate is checked, host name included.
+        client_context = ssl.create_default_context(cafile=CERTIFICATE)
+        async with (
+            handler.proxy_session(await self.endpoint(relay=True)) as session,
+            session.get(f"https://localhost:{port}/", ssl=client_context) as response,
+        ):
+            self.assertEqual(response.status, 204)
+
+    async def test_silent_tls_server_is_cut_off_in_time(self):
+        test = outbound_test("a", "https://example.invalid/", OutboundTestRule.ANY_STATUS)
+        port = await self.endpoint(relay=False)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        with (
+            patch("server.outbound_probe.TEST_TIMEOUT", 0.1),
+            patch("server.outbound_probe.SPEED_TEST_DURATION", 0.1),
+        ):
+            # A hang fails the test instead of blocking the run.
+            async with asyncio.timeout(5), handler.proxy_session(port) as session:
+                self.assertFalse(await handler.run_test(session, test))
+                self.assertEqual(await handler.download_speed(session), 0)
+        self.assertLess(loop.time() - started, 1)
 
 
 class HandlerTests(unittest.IsolatedAsyncioTestCase):
@@ -180,6 +346,27 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         messages = await client.messages()
         self.assertEqual([message["model"] for message in messages], ["outbound_server"])
         self.assertEqual(messages[0]["payload"][0]["tests"], {"google": True, "site": False})
+
+    async def test_tests_run_at_the_same_time_before_the_speed_test(self):
+        server = self.saved(vless(443))
+        events = []
+
+        async def run_test(session, test):
+            events.append(f"start {test.alias}")
+            await asyncio.sleep(0.01)
+            events.append(f"end {test.alias}")
+            return test.alias == "site"
+
+        async def speed(session):
+            events.append("speed")
+            return 0
+
+        self.run_test.side_effect = run_test
+        self.speed.side_effect = speed
+        updated = await handler.test_outbound(self.context, server)
+        assert updated is not None
+        self.assertEqual(events, ["start google", "start site", "end google", "end site", "speed"])
+        self.assertEqual(updated.tests, {"google": False, "site": True})
 
     async def test_unreachable_server_stops_after_ping(self):
         server = self.saved(vless(443, speed=500, tests={"old": True}))
@@ -438,10 +625,11 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connected.id, fast.id)
 
 
-class MihomoCheckTests(unittest.IsolatedAsyncioTestCase):
+class MihomoCheckTests(ListenerTestCase):
     """Real traffic: Mihomo -> local VLESS relay -> local HTTP server."""
 
     async def asyncSetUp(self):
+        await super().asyncSetUp()
         directory = self.enterContext(TemporaryDirectory())
         self.enterContext(chdir(directory))
         self.core = MihomoClient()
@@ -457,7 +645,6 @@ class MihomoCheckTests(unittest.IsolatedAsyncioTestCase):
         )
         self.requests: list[tuple[str, str]] = []
         self.targets: list[str] = []
-        self.writers: list[asyncio.StreamWriter] = []
         self.http_port = await self.listen(self.http)
         self.relay_port = await self.listen(self.vless_relay)
         manager = application()
@@ -465,25 +652,6 @@ class MihomoCheckTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(manager.__aexit__, None, None, None)
         # application() has started the core; no servers were stored yet.
         self.assertIsNotNone(self.core.test_port)
-
-    async def asyncTearDown(self):
-        for writer in self.writers:
-            writer.close()
-
-    async def listen(self, handle) -> int:
-        async def tracked(reader, writer):
-            self.writers.append(writer)
-            try:
-                await handle(reader, writer)
-            except (asyncio.IncompleteReadError, ConnectionError):
-                pass
-            finally:
-                writer.close()
-
-        listener = await asyncio.start_server(tracked, "127.0.0.1", 0)
-        self.addAsyncCleanup(listener.wait_closed)
-        self.addCleanup(listener.close)
-        return listener.sockets[0].getsockname()[1]
 
     async def http(self, reader, writer):
         request = await reader.readuntil(b"\r\n\r\n")
@@ -524,17 +692,6 @@ class MihomoCheckTests(unittest.IsolatedAsyncioTestCase):
         target_reader, target_writer = await asyncio.open_connection(host, port)
         self.writers.append(target_writer)
         writer.write(b"\x00\x00")
-
-        async def pipe(source, destination):
-            try:
-                while data := await source.read(65536):
-                    destination.write(data)
-                    await destination.drain()
-            except ConnectionError:
-                pass
-            finally:
-                destination.close()
-
         await asyncio.gather(pipe(reader, target_writer), pipe(target_reader, writer))
 
     async def test_all_steps_through_the_test_endpoint(self):
@@ -553,10 +710,7 @@ class MihomoCheckTests(unittest.IsolatedAsyncioTestCase):
         self.context.settings.outbound_server.add_servers([server, dead])
         await self.core.outbound_register([server, dead])
         await self.core.outbound_connect(dead.id)
-        with (
-            patch("server.outbound_probe.SPEED_TEST_URL", f"{base}/down"),
-            patch("server.outbound_probe.REQUEST_TIMEOUT", 1),
-        ):
+        with patch("server.outbound_probe.SPEED_TEST_URL", f"{base}/down"):
             updated = await handler.test_outbound(self.context, server)
         assert updated is not None
         self.assertEqual(
@@ -570,17 +724,13 @@ class MihomoCheckTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             updated.rating, handler.server_rating(updated.ping, updated.speed, updated.tests)
         )
-        # Redirects are not followed; host names go to the proxy; no compression.
-        self.assertEqual(
-            self.requests,
-            [
-                ("/down", "accept-encoding: identity"),
-                ("/status/204", ""),
-                ("/status/503", ""),
-                ("/redirect", ""),
-                ("/hang", ""),
-            ],
+        # Tests run at the same time, then the speed test. Redirects are not
+        # followed; host names go to the proxy; no compression.
+        self.assertCountEqual(
+            self.requests[:-1],
+            [("/status/204", ""), ("/status/503", ""), ("/redirect", ""), ("/hang", "")],
         )
+        self.assertEqual(self.requests[-1], ("/down", "accept-encoding: identity"))
         # Every request, including the one to a closed port, went through the relay.
         self.assertEqual(set(self.targets), {f"127.0.0.1:{self.http_port}", f"127.0.0.1:{closed}"})
         proxies = (await self.core.rest_client.get_proxies())["proxies"]

@@ -1,5 +1,6 @@
 """Check one outbound server and store its health: ping, speed, tests and rating."""
 
+import asyncio
 import logging
 
 from ..models.application_context import ApplicationContext
@@ -64,16 +65,21 @@ async def test_outbound(
     server registered in it (outbound_register): test_connect only switches the
     test endpoint to a registered server.
 
-    1. TCP servers are pinged. If no attempt connects within PING_LIMIT, the
-       check stops: speed is None, every test fails, the rating is 0 and the
-       server gets filtered = by_ping. Otherwise by_ping is cleared.
+    1. TCP servers are pinged, for at most PING_LIMIT seconds. If no attempt
+       connects in time, the check stops: speed is None, every test fails, the
+       rating is 0 and the server gets filtered = by_ping. Otherwise by_ping
+       is cleared.
     2. The test endpoint is switched to the server; checks of different servers
        wait for each other, since the endpoint is shared.
-    3. Download speed is measured through the endpoint.
-    4. ServerSettings.outbound_tests run one after another through the endpoint.
+    3. ServerSettings.outbound_tests run at the same time through the endpoint,
+       each for at most TEST_TIMEOUT seconds.
+    4. Download speed is measured through the endpoint, for at most
+       SPEED_TEST_DURATION seconds.
 
     Returns the stored server, or None if it was deleted during the check.
-    The check takes seconds but does not block the event loop.
+    Without waiting for the endpoint, the check takes at most about
+    PING_LIMIT + TEST_TIMEOUT + SPEED_TEST_DURATION seconds; it does not block
+    the event loop.
     """
     outbound_tests = context.settings.server_settings.get().outbound_tests
     tests = {test.alias: False for test in outbound_tests}
@@ -90,9 +96,11 @@ async def test_outbound(
                 if port is None:
                     raise RuntimeError("The core has no test endpoint")
                 async with proxy_session(port) as session:
+                    results = await asyncio.gather(
+                        *(run_test(session, test) for test in outbound_tests)
+                    )
+                    tests = {test.alias: passed for test, passed in zip(outbound_tests, results)}
                     speed = await download_speed(session)
-                    for test in outbound_tests:
-                        tests[test.alias] = await run_test(session, test)
             finally:
                 try:
                     await context.core_client.test_stop()

@@ -5,6 +5,7 @@ import json
 import logging
 import signal
 import sqlite3
+import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC
@@ -523,9 +524,11 @@ async def main() -> None:
         loop.call_soon_threadsafe(stop.set)
 
     # signal.signal also works on Windows, unlike loop.add_signal_handler.
-    previous_handlers = {
-        signum: signal.signal(signum, request_stop) for signum in (signal.SIGINT, signal.SIGTERM)
-    }
+    # SIGHUP (POSIX only) comes when the terminal running the server closes.
+    signums = [signal.SIGINT, signal.SIGTERM]
+    if sys.platform != "win32":
+        signums.append(signal.SIGHUP)
+    previous_handlers = {signum: signal.signal(signum, request_stop) for signum in signums}
     try:
         async with application() as context:
             configure_handlers(context)

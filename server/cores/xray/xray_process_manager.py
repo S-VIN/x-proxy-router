@@ -5,13 +5,11 @@ import json
 import logging
 import os
 import socket
-import subprocess
-import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from ...models import CoreState, CoreStatus, OperatingSystem
-from ...utils import detect_platform
+from ...utils import detect_platform, start_child_process
 from ..core_process_manager import CoreProcessManagerInterface
 
 log = logging.getLogger(__name__)
@@ -98,20 +96,12 @@ class XrayProcessManager(CoreProcessManagerInterface):
         self._exit_code = None
         try:
             binary = self.binary_path
-            self._process = await asyncio.create_subprocess_exec(
+            self._process = await start_child_process(
                 str(binary),
                 "run",
                 "-config",
                 str(self._config),
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
                 env=dict(os.environ, XRAY_LOCATION_ASSET=str(binary.parent)),
-                **(
-                    {"creationflags": subprocess.CREATE_NO_WINDOW}
-                    if sys.platform == "win32"
-                    else {}
-                ),
             )
         except Exception as error:
             self._state = CoreState.FAILED

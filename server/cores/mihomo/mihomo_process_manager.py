@@ -5,13 +5,11 @@ import json
 import logging
 import secrets
 import socket
-import subprocess
-import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from ...models import CoreState, CoreStatus, OperatingSystem
-from ...utils import detect_platform
+from ...utils import detect_platform, start_child_process
 from ..core_process_manager import CoreProcessManagerInterface
 
 log = logging.getLogger(__name__)
@@ -79,20 +77,8 @@ class MihomoProcessManager(CoreProcessManagerInterface):
             self.api_secret = secrets.token_urlsafe(32)
             path = Path(self._directory.name) / "config.json"
             path.write_text(json.dumps(self._generate_config()), encoding="utf-8")
-            self._process = await asyncio.create_subprocess_exec(
-                str(self.binary_path),
-                "-d",
-                self._directory.name,
-                "-f",
-                str(path),
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                **(
-                    {"creationflags": subprocess.CREATE_NO_WINDOW}
-                    if sys.platform == "win32"
-                    else {}
-                ),
+            self._process = await start_child_process(
+                str(self.binary_path), "-d", self._directory.name, "-f", str(path)
             )
         except Exception as error:
             self._state = CoreState.FAILED

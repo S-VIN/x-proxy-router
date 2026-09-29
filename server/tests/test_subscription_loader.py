@@ -81,13 +81,9 @@ class LoaderTests(unittest.IsolatedAsyncioTestCase):
         cls.http = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         threading.Thread(target=cls.http.serve_forever, daemon=True).start()
         cls.base = f"http://127.0.0.1:{cls.http.server_port}"
-        # Keep loopback requests away from a developer's HTTP(S)_PROXY.
-        cls.no_proxy = patch.dict(os.environ, {"no_proxy": "127.0.0.1", "NO_PROXY": "127.0.0.1"})
-        cls.no_proxy.start()
 
     @classmethod
     def tearDownClass(cls):
-        cls.no_proxy.stop()
         cls.http.shutdown()
         cls.http.server_close()
 
@@ -100,6 +96,19 @@ class LoaderTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(servers[0].name, "Test")
                 self.assertEqual(servers[0].subscription_id, link.id)
         self.assertEqual(_Handler.user_agent, "v2rayN/7.0")
+
+    async def test_proxy_settings_are_ignored(self):
+        # Nothing listens on port 1: a request through the proxy would fail.
+        proxy = "http://127.0.0.1:1"
+        variables = ("http_proxy", "https_proxy", "all_proxy")
+        environment = {name: proxy for name in variables} | {
+            name.upper(): proxy for name in variables
+        }
+        with patch.dict(os.environ, environment):
+            for name in ("no_proxy", "NO_PROXY"):
+                os.environ.pop(name, None)
+            servers = await load_subscription(self.base + "/plain")
+        self.assertEqual(len(servers), 1)
 
     async def test_direct_vless_link_does_not_download(self):
         with patch("server.subscription_loader._download") as download:

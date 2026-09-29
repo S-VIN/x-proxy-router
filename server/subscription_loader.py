@@ -7,7 +7,7 @@ import zlib
 from copy import deepcopy
 from typing import Any
 from urllib.parse import parse_qsl, unquote, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 from uuid import UUID, uuid4
 
 from .models import (
@@ -26,6 +26,9 @@ from .models import (
 __all__ = ["SubscriptionError", "load_subscription"]
 
 _MAX_SIZE = 10 * 1024 * 1024
+# Subscriptions are always downloaded directly: HTTP(S)_PROXY and system proxy
+# settings are ignored.
+_OPENER = build_opener(ProxyHandler({}))
 
 
 class SubscriptionError(RuntimeError):
@@ -60,7 +63,7 @@ async def load_subscription(link: str | SubscriptionLink) -> list[OutboundServer
 def _download(url: str) -> str:
     # Providers choose the response format by User-Agent.
     request = Request(url, headers={"User-Agent": "v2rayN/7.0", "Accept-Encoding": "gzip, deflate"})
-    with urlopen(request, timeout=30) as response:
+    with _OPENER.open(request, timeout=30) as response:
         body = response.read(_MAX_SIZE + 1)
         encoding = response.headers.get("Content-Encoding", "identity").lower()
     # Some providers compress even when asked for identity, so trust the magic bytes too.
