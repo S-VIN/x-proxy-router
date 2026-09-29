@@ -109,7 +109,7 @@ class XrayProcessManager(CoreProcessManagerInterface):
                 env=dict(os.environ, XRAY_LOCATION_ASSET=str(binary.parent)),
                 **(
                     {"creationflags": subprocess.CREATE_NO_WINDOW}
-                    if OperatingSystem(sys.platform) is OperatingSystem.WINDOWS
+                    if sys.platform == "win32"
                     else {}
                 ),
             )
@@ -127,6 +127,8 @@ class XrayProcessManager(CoreProcessManagerInterface):
 
     async def _watch(self):
         process = self._process
+        # start() creates the process with stdout=PIPE before it starts this task.
+        assert process is not None and process.stdout is not None
         # Merge stdout/stderr and drain in this same task, including long lines.
         while chunk := await process.stdout.read(4096):
             log.info("Xray: %s", chunk.decode(errors="replace").rstrip())

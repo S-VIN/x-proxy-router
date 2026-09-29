@@ -20,7 +20,10 @@ _GRPC_TIMEOUT = 5
 
 def typed_message(message: Message) -> TypedMessage:
     """Pack a protobuf config into Xray's TypedMessage (not protobuf Any)."""
-    return TypedMessage(type=message.DESCRIPTOR.full_name, value=message.SerializeToString())
+    # Generated message classes always set DESCRIPTOR; the base class leaves it None.
+    descriptor = message.DESCRIPTOR
+    assert descriptor is not None
+    return TypedMessage(type=descriptor.full_name, value=message.SerializeToString())
 
 
 class XrayGrpcClient:

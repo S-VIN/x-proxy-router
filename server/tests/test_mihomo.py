@@ -92,6 +92,7 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
         for role in ("main", "test"):
             self.assertEqual(proxies[role]["all"], ["REJECT"])
             self.assertEqual(proxies[role]["now"], "REJECT")
+        assert c.proxy_port is not None and c.test_port is not None
         await c._check_listener(c.proxy_port)
         await c._check_listener(c.test_port)
 
@@ -206,6 +207,7 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
         proxies = (await c.rest_client.get_proxies())["proxies"]
         self.assertEqual(proxies["main"]["now"], second.id)
         self.assertEqual(proxies["test"]["now"], "REJECT")
+        assert c.test_port is not None
         await c._check_listener(c.test_port)
         await c.test_connect(first.id)
         await self.ping(await self.socks(c.test_port), b"main:")
@@ -226,9 +228,9 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 def connection_made(self, transport):
                     self.transport = transport
 
-                def datagram_received(self, data, address):
+                def datagram_received(self, data, addr):
                     # Plain Shadowsocks UDP: IPv4 destination header followed by payload.
-                    self.transport.sendto(data[:7] + label + data[7:], address)
+                    self.transport.sendto(data[:7] + label + data[7:], addr)
 
             transport, _ = await loop.create_datagram_endpoint(Echo, local_addr=("127.0.0.1", 0))
             self.datagrams.append(transport)
@@ -347,7 +349,9 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 "/version",
                 None,
             )
-        c.process_manager._process.kill()
-        await c.process_manager._task
+        process, task = c.process_manager._process, c.process_manager._task
+        assert process is not None and task is not None
+        process.kill()
+        await task
         self.assertEqual(c.process_manager.status().state, CoreState.FAILED)
         self.assertIsNone(c.process_manager.status().pid)

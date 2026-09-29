@@ -104,6 +104,8 @@ class MihomoProcessManager(CoreProcessManagerInterface):
 
     async def _watch(self):
         process = self._process
+        # start() creates the process with stdout=PIPE before it starts this task.
+        assert process is not None and process.stdout is not None
         while chunk := await process.stdout.read(4096):
             log.info("Mihomo: %s", chunk.decode(errors="replace").rstrip())
         self._exit_code = await process.wait()

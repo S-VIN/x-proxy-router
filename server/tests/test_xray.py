@@ -86,7 +86,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             await self.wait_api(self.manager)
             await other.start()
             await self.wait_api(other)
-            self.assertIsInstance(self.manager.api_port, int)
+            assert isinstance(self.manager.api_port, int)
             self.assertGreater(self.manager.api_port, 0)
             self.assertNotEqual(self.manager.api_port, other.api_port)
         finally:
@@ -96,6 +96,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_generated_config_and_api(self):
         await self.manager.start()
         path = self.manager._config
+        assert path is not None and self.manager.api_port is not None
         config = json.loads(path.read_text())
         self.assertEqual(config["api"]["listen"], f"127.0.0.1:{self.manager.api_port}")
         self.assertGreater(self.manager.api_port, 0)
@@ -139,7 +140,9 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_crash_stays_failed(self):
         await self.manager.start()
-        self.manager._process.kill()
+        process = self.manager._process
+        assert process is not None
+        process.kill()
         await self.wait_for(lambda: self.manager.status().state == CoreState.FAILED)
         await asyncio.sleep(0.1)
         self.assertEqual(self.manager.status().state, CoreState.FAILED)

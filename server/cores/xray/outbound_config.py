@@ -1,12 +1,14 @@
 """Convert subscription models to Xray JSON without mutating the models."""
 
 from copy import deepcopy
+from typing import Any
 
 from ...models import OutboundProtocol, OutboundServer
 
 
 def outbound_config(server: OutboundServer, tag: str) -> dict:
-    stream = deepcopy(server.stream_options)
+    # Provider JSON is edited in place, so nested values are not narrowed from JsonValue.
+    stream: dict[str, Any] = deepcopy(server.stream_options)
     stream.update(network=server.transport.value, security=server.security.value)
     if server.security.value != "none":
         security = stream.setdefault(f"{server.security.value}Settings", {})

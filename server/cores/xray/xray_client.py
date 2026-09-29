@@ -45,6 +45,7 @@ class XrayClient(CoreClient):
             raise RuntimeError("Stop the service before starting it again")
         try:
             await self.process_manager.start()
+            assert self.process_manager.api_port is not None
             await self.grpc_client.connect(self.process_manager.api_port)
             await self._set_inbound("main", proxy_port)
             await self._set_inbound("test", test_port)

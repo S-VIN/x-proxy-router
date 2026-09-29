@@ -29,9 +29,14 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
         await self.client.close()
         await self.manager.stop()
 
+    def api_port(self) -> int:
+        """The API port of the started manager."""
+        assert self.manager.api_port is not None
+        return self.manager.api_port
+
     async def test_handlers_and_routing(self):
         await self.manager.start()
-        await self.client.connect(self.manager.api_port)
+        await self.client.connect(self.api_port())
         client = self.client
         self.assertEqual([item.tag for item in await client.list_outbounds()], ["blocked"])
         await client.add_outbound(
@@ -106,11 +111,11 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_client_works_after_process_restart(self):
         await self.manager.start()
-        await self.client.connect(self.manager.api_port)
+        await self.client.connect(self.api_port())
         await self.client.close()
         await self.manager.stop()
         with self.assertRaises(RuntimeError):
             await self.client.list_outbounds()
         await self.manager.start()
-        await self.client.connect(self.manager.api_port)
+        await self.client.connect(self.api_port())
         self.assertEqual([item.tag for item in await self.client.list_outbounds()], ["blocked"])
