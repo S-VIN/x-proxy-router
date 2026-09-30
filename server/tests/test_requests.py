@@ -98,7 +98,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         self.client = Client(self.context.websocket)
         # Skip the initial snapshots.
         async with asyncio.timeout(2):
-            while len(self.client.frames) < 5:
+            while len(self.client.frames) < 6:
                 self.client.received.clear()
                 await self.client.received.wait()
         await startup_finished(self.context)

@@ -2,14 +2,19 @@ import asyncio
 import socket
 import unittest
 from copy import deepcopy
+from dataclasses import replace
+from typing import Any
+from unittest.mock import patch
 from uuid import UUID
 
-from server.cores import CoreClient, CoreProcessManagerInterface
-from server.cores.mihomo.mihomo_client import MihomoClient
+from server.cores import CoreClient, CoreProcessManagerInterface, InboundError
+from server.cores.mihomo.mihomo_client import MihomoClient, inbound_config
 from server.cores.mihomo.mihomo_process_manager import MihomoError
 from server.cores.mihomo.outbound_config import outbound_config
 from server.models import (
     CoreState,
+    InboundServer,
+    InboundType,
     OutboundProtocol,
     OutboundSecurity,
     OutboundServer,
@@ -32,6 +37,11 @@ def remote(port=12345):
         protocol=OutboundProtocol.VLESS,
         vless_uuid=UUID(int=1),
     )
+
+
+def inbound(**values: Any) -> InboundServer:
+    values.setdefault("proxy_port", free_port())
+    return InboundServer(type=InboundType.PROXY, **values)
 
 
 class MihomoConfigTests(unittest.TestCase):
@@ -62,11 +72,27 @@ class MihomoConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             MihomoClient().check_outbound_server_config(model)
 
+    def test_inbound_listener(self):
+        listener = inbound(proxy_listen="::", proxy_username="user", proxy_password="secret")
+        self.assertEqual(
+            inbound_config(listener),
+            {
+                "name": listener.id,
+                "type": "mixed",
+                "listen": "::",
+                "port": listener.proxy_port,
+                "udp": True,
+                "users": [{"username": "user", "password": "secret"}],
+            },
+        )
+        self.assertNotIn("users", inbound_config(inbound()))
+        MihomoClient().check_inbound_config(listener)
+
 
 class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_register_and_delete_servers(self):
         c = self.client
-        await c.service_start(free_port(), free_port())
+        await c.service_start(free_port())
         first, second = remote(), remote()
         await c.outbound_register([first, second])
         await c.outbound_connect(first.id)
@@ -92,15 +118,12 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
         for role in ("main", "test"):
             self.assertEqual(proxies[role]["all"], ["REJECT"])
             self.assertEqual(proxies[role]["now"], "REJECT")
-        assert c.proxy_port is not None and c.test_port is not None
-        await c._check_listener(c.proxy_port)
+        assert c.test_port is not None
         await c._check_listener(c.test_port)
 
-    async def test_commands_do_not_read_or_cache_configuration(self):
-        from unittest.mock import patch
-
+    async def test_commands_do_not_read_configuration(self):
         c = self.client
-        await c.service_start(free_port(), free_port())
+        await c.service_start(free_port())
         request = c.rest_client.request
 
         async def command_only(method, path, body=None):
@@ -113,10 +136,8 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await c.outbound_connect(first.id)
             await c.test_connect(second.id)
             await c.test_stop()
+            await c.inbound_set(inbound())
             await c.outbound_delete_all()
-        self.assertEqual(
-            set(vars(c)), {"process_manager", "rest_client", "proxy_port", "test_port"}
-        )
         self.assertFalse(hasattr(c.process_manager, "config"))
 
     async def asyncSetUp(self):
@@ -161,12 +182,18 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.listeners.append(listener)
         return remote(listener.sockets[0].getsockname()[1])
 
-    async def socks(self, port):
+    async def socks(self, port, auth=None):
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
         self.writers.append(writer)
-        writer.write(b"\x05\x01\x00")
+        method = b"\x02" if auth else b"\x00"
+        writer.write(b"\x05\x01" + method)
         await writer.drain()
-        self.assertEqual(await reader.readexactly(2), b"\x05\x00")
+        self.assertEqual(await reader.readexactly(2), b"\x05" + method)
+        if auth:
+            user, password = auth
+            writer.write(bytes([1, len(user)]) + user + bytes([len(password)]) + password)
+            await writer.drain()
+            self.assertEqual(await reader.readexactly(2), b"\x01\x00")
         # Documentation address; fake local VLESS endpoint does not dial it.
         writer.write(b"\x05\x01\x00\x01\xc0\x00\x02\x01\x00\x50")
         await writer.drain()
@@ -187,11 +214,13 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(c, CoreClient)
         self.assertIsInstance(c.process_manager, CoreProcessManagerInterface)
         first, second = await self.echo_vless(b"main:"), await self.echo_vless(b"test:")
-        await c.service_start(free_port(), free_port())
+        await c.service_start(free_port())
+        main = inbound()
+        await c.inbound_set(main)
         await c.outbound_register([first, second])
         await c.outbound_connect(first.id)
         pid = c.process_manager.status().pid
-        connection = await self.socks(c.proxy_port)
+        connection = await self.socks(main.proxy_port)
         await self.ping(connection, b"main:")
         await c.test_connect(second.id)
         await self.ping(await self.socks(c.test_port), b"test:")
@@ -200,7 +229,7 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self.ping(await self.socks(c.test_port), b"main:")
         await self.ping(connection, b"main:")
         await c.outbound_connect(second.id)
-        await self.ping(await self.socks(c.proxy_port), b"test:")
+        await self.ping(await self.socks(main.proxy_port), b"test:")
         await self.ping(await self.socks(c.test_port), b"main:")
         await c.test_stop()
         await c.test_stop()
@@ -218,7 +247,83 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((proxies["main"]["now"], proxies["test"]["now"]), ("REJECT", first.id))
         await self.ping(await self.socks(c.test_port), b"main:")
         await c.outbound_connect(second.id)
-        await self.ping(await self.socks(c.proxy_port), b"test:")
+        await self.ping(await self.socks(main.proxy_port), b"test:")
+
+    async def test_inbounds_keep_routes_and_connections(self):
+        c = self.client
+        first, second = await self.echo_vless(b"main:"), await self.echo_vless(b"test:")
+        await c.service_start(free_port())
+        main = inbound()
+        await c.inbound_set(main)
+        await c.outbound_register([first, second])
+        await c.outbound_connect(first.id)
+        await c.test_connect(second.id)
+        connection = await self.socks(main.proxy_port)
+        await self.ping(connection, b"main:")
+        # A new inbound replaces the config: routes and open connections stay.
+        other = inbound(proxy_username="user", proxy_password="secret")
+        await c.inbound_set(other)
+        proxies = (await c.rest_client.get_proxies())["proxies"]
+        self.assertEqual((proxies["main"]["now"], proxies["test"]["now"]), (first.id, second.id))
+        await self.ping(connection, b"main:")
+        await self.ping(await self.socks(c.test_port), b"test:")
+        await self.ping(await self.socks(other.proxy_port, (b"user", b"secret")), b"main:")
+        # The same listener again sends no config.
+        with patch.object(c.rest_client, "replace_config") as replaced:
+            await c.inbound_set(replace(main, error="ignored"))
+        replaced.assert_not_called()
+        moved = replace(main, proxy_port=free_port())
+        await c.inbound_set(moved)
+        await self.ping(await self.socks(moved.proxy_port), b"main:")
+        with self.assertRaises(OSError):
+            await asyncio.open_connection("127.0.0.1", main.proxy_port)
+        # New servers block the routes but keep the inbounds.
+        await c.outbound_register([first])
+        self.assertEqual((await c.rest_client.get_proxies())["proxies"]["main"]["now"], "REJECT")
+        await c.outbound_connect(first.id)
+        await self.ping(await self.socks(moved.proxy_port), b"main:")
+        await c.inbound_delete(moved.id)
+        await c.inbound_delete(moved.id)
+        with self.assertRaises(OSError):
+            await asyncio.open_connection("127.0.0.1", moved.proxy_port)
+        await self.ping(await self.socks(other.proxy_port, (b"user", b"secret")), b"main:")
+
+    async def test_inbound_failures_keep_the_previous_listener(self):
+        c = self.client
+        with self.assertRaises(RuntimeError):
+            await c.inbound_set(inbound())
+        await c.service_start(free_port())
+        first = remote()
+        await c.outbound_register([first])
+        await c.outbound_connect(first.id)
+        listener = inbound()
+        await c.inbound_set(listener)
+        with socket.socket() as occupied:
+            occupied.bind(("127.0.0.1", 0))
+            occupied.listen()
+            with self.assertRaises(InboundError) as raised:
+                await c.inbound_set(replace(listener, proxy_port=occupied.getsockname()[1]))
+            self.assertEqual(raised.exception.field, "proxy_port")
+        # 192.0.2.0/24 is reserved for documentation and never assigned.
+        with self.assertRaises(InboundError) as raised:
+            await c.inbound_set(replace(listener, proxy_listen="192.0.2.1"))
+        self.assertEqual(raised.exception.field, "proxy_listen")
+        with self.assertRaises(InboundError):
+            await c.inbound_set(inbound(proxy_port=c.test_port))
+        # Mihomo accepts a listener it cannot open; the previous config comes back.
+        failed = InboundError("The core could not listen", "proxy_port")
+        new = inbound()
+        with patch.object(c, "_check_inbound_listening", side_effect=failed):
+            with self.assertRaises(InboundError):
+                await c.inbound_set(replace(listener, proxy_port=free_port()))
+            with self.assertRaises(InboundError):
+                await c.inbound_set(new)
+        await c._check_inbound_listening(listener)
+        with self.assertRaises(OSError):
+            await asyncio.open_connection("127.0.0.1", new.proxy_port)
+        self.assertEqual((await c.rest_client.get_proxies())["proxies"]["main"]["now"], first.id)
+        with self.assertRaises(ValueError):
+            await c.inbound_set(replace(listener, id="test"))
 
     async def test_udp_routes_are_independent(self):
         loop = asyncio.get_running_loop()
@@ -245,11 +350,13 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         c = self.client
         first, second = await endpoint(b"main:"), await endpoint(b"test:")
-        await c.service_start(free_port(), free_port())
+        await c.service_start(free_port())
+        main = inbound()
+        await c.inbound_set(main)
         await c.outbound_register([first, second])
         await c.outbound_connect(first.id)
         await c.test_connect(second.id)
-        for port, label in ((c.proxy_port, b"main:"), (c.test_port, b"test:")):
+        for port, label in ((main.proxy_port, b"main:"), (c.test_port, b"test:")):
             reader, writer = await asyncio.open_connection("127.0.0.1", port)
             self.writers.append(writer)
             writer.write(b"\x05\x01\x00")
@@ -269,18 +376,15 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_blocked_start_invalid_ports_and_rejected_config(self):
         c = self.client
         with self.assertRaises(ValueError):
-            await c.service_start(False, free_port())
-        port = free_port()
-        with self.assertRaises(ValueError):
-            await c.service_start(port, port)
+            await c.service_start(False)
         with self.assertRaises(RuntimeError):
             await c.test_connect(remote().id)
         for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
             with socket.socket(type=kind) as occupied:
                 occupied.bind(("127.0.0.1", 0))
                 with self.assertRaises(OSError):
-                    await c.service_start(free_port(), occupied.getsockname()[1])
-        await c.service_start(free_port(), free_port())
+                    await c.service_start(occupied.getsockname()[1])
+        await c.service_start(free_port())
         first = remote()
         await c.outbound_register([first])
         await c.outbound_connect(first.id)
@@ -291,12 +395,12 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await c.rest_client.get_proxies())["proxies"]["main"]["now"], first.id)
         await c.service_stop()
         self.assertEqual(c.process_manager.status().state, CoreState.STOPPED)
-        await c.service_start(free_port(), free_port())
+        await c.service_start(free_port())
         self.assertEqual((await c.rest_client.get_proxies())["proxies"]["main"]["now"], "REJECT")
 
     async def test_core_accepts_supported_protocols(self):
         c = self.client
-        await c.service_start(free_port(), free_port())
+        await c.service_start(free_port())
         cases = [
             remote(),
             OutboundServer(
@@ -337,7 +441,7 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_process_failure_and_api_auth(self):
         c = self.client
-        await c.service_start(free_port(), free_port())
+        await c.service_start(free_port())
         from server.cores.mihomo.mihomo_rest_client import MihomoRestClient
 
         with self.assertRaises(MihomoError):

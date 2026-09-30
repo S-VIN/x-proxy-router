@@ -315,6 +315,7 @@ class ApplicationSyncTests(unittest.IsolatedAsyncioTestCase):
         load.side_effect = loaded
         async with asyncio.timeout(2), application() as context:
             context.settings.subscription_link.save(SubscriptionLink(url="https://e.com/s", id="s"))
+            (inbound,) = context.settings.inbound_server.get_all()
             client = Client(context.websocket)
             snapshots = await client.messages()
             self.assertEqual(
@@ -324,6 +325,7 @@ class ApplicationSyncTests(unittest.IsolatedAsyncioTestCase):
                     ("subscription_link", True, [{"id": "s", "url_short": "https://e.com"}]),
                     ("reg_filter", True, []),
                     ("outbound_server", True, []),
+                    ("inbound_server", True, [serialize(inbound)]),
                     (
                         "task",
                         True,

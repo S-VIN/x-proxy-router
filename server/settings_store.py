@@ -11,6 +11,7 @@ from types import TracebackType
 from typing import Any, ClassVar, Self
 from uuid import UUID
 
+from .models.inbound_server import DEFAULT_PROXY_PORT, InboundServer, InboundType
 from .models.outbound_server import (
     FilterReason,
     GrpcMode,
@@ -183,6 +184,94 @@ class RegFilterStore:
         """Delete a filter by id; return False if it did not exist."""
         with self._connection:
             cursor = self._connection.execute("DELETE FROM reg_filters WHERE id = ?", (filter_id,))
+        return cursor.rowcount > 0
+
+
+class InboundServerStore:
+    """Listeners of the core, sharing the connection owned by SettingsStore.
+
+    Creating the table also stores the default inbound: a proxy on
+    127.0.0.1:DEFAULT_PROXY_PORT. Deleted, it does not come back.
+    """
+
+    def __init__(self, connection: sqlite3.Connection):
+        self._connection = connection
+        with self._connection:
+            created = (
+                self._connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'inbound_servers'"
+                ).fetchone()
+                is None
+            )
+            # Ports are unique among inbounds; NULL ports of other types do not conflict.
+            self._connection.execute(
+                "CREATE TABLE IF NOT EXISTS inbound_servers ("
+                "id TEXT PRIMARY KEY NOT NULL, "
+                "type TEXT NOT NULL, "
+                "enabled INTEGER NOT NULL, "
+                "proxy_listen TEXT, "
+                "proxy_port INTEGER UNIQUE, "
+                "proxy_username TEXT, "
+                "proxy_password TEXT, "
+                "error TEXT)"
+            )
+            if created:
+                self._write(InboundServer(type=InboundType.PROXY, proxy_port=DEFAULT_PROXY_PORT))
+
+    def _read(self, query: str, parameters: tuple[str, ...] = ()) -> list[InboundServer]:
+        cursor = self._connection.execute(query, parameters)
+        cursor.row_factory = sqlite3.Row
+        inbounds = []
+        for row in cursor:
+            values: dict[str, Any] = {item.name: row[item.name] for item in fields(InboundServer)}
+            values["type"] = InboundType(values["type"])
+            values["enabled"] = bool(values["enabled"])
+            inbounds.append(InboundServer(**values))
+        return inbounds
+
+    def get_all(self) -> list[InboundServer]:
+        """Return a snapshot of all inbounds in insertion order."""
+        return self._read("SELECT * FROM inbound_servers ORDER BY rowid")
+
+    def get_by_id(self, inbound_id: str) -> InboundServer | None:
+        inbounds = self._read("SELECT * FROM inbound_servers WHERE id = ?", (inbound_id,))
+        return inbounds[0] if inbounds else None
+
+    def save(self, inbound: InboundServer) -> None:
+        """Insert an inbound or update it by id, preserving insertion order.
+
+        A port already used by another inbound raises sqlite3.IntegrityError.
+        """
+        with self._connection:
+            self._write(inbound)
+
+    def _write(self, inbound: InboundServer) -> None:
+        values = {item.name: getattr(inbound, item.name) for item in fields(InboundServer)}
+        # Column names come only from the model's fields.
+        columns = ", ".join(values)
+        parameters = ", ".join(f":{column}" for column in values)
+        assignments = ", ".join(
+            f"{column} = excluded.{column}" for column in values if column != "id"
+        )
+        self._connection.execute(
+            f"INSERT INTO inbound_servers ({columns}) VALUES ({parameters}) "
+            f"ON CONFLICT(id) DO UPDATE SET {assignments}",
+            values,
+        )
+
+    def set_error(self, inbound_id: str, error: str | None) -> None:
+        """Replace the error the server keeps for the inbound; other fields are kept."""
+        with self._connection:
+            self._connection.execute(
+                "UPDATE inbound_servers SET error = ? WHERE id = ?", (error, inbound_id)
+            )
+
+    def delete(self, inbound_id: str) -> bool:
+        """Delete an inbound by id; return False if it did not exist."""
+        with self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM inbound_servers WHERE id = ?", (inbound_id,)
+            )
         return cursor.rowcount > 0
 
 
@@ -483,6 +572,7 @@ class SettingsStore:
     subscription_link: SubscriptionLinkStore
     reg_filter: RegFilterStore
     outbound_server: OutboundServerStore
+    inbound_server: InboundServerStore
 
     def __new__(cls) -> Self:
         if cls._instance is None:
@@ -496,6 +586,7 @@ class SettingsStore:
                 instance.outbound_server = OutboundServerStore(
                     instance._connection, instance.reg_filter
                 )
+                instance.inbound_server = InboundServerStore(instance._connection)
             except Exception:
                 instance._connection.close()
                 raise

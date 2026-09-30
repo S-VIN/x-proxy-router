@@ -1,6 +1,7 @@
 """Server data models and enumerations."""
 
 from .core_state import CoreState, CoreStatus
+from .inbound_server import DEFAULT_PROXY_PORT, InboundFieldError, InboundServer, InboundType
 from .outbound_server import (
     FilterReason,
     GrpcMode,
@@ -22,12 +23,16 @@ from .subscription_link import SubscriptionLink
 from .task_state import TaskState, TaskStatus
 
 __all__ = [
+    "DEFAULT_PROXY_PORT",
     "SECRET",
     "Architecture",
     "CoreState",
     "CoreStatus",
     "FilterReason",
     "GrpcMode",
+    "InboundFieldError",
+    "InboundServer",
+    "InboundType",
     "JsonValue",
     "OperatingSystem",
     "OutboundProtocol",
