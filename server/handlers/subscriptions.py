@@ -10,7 +10,8 @@ from ..models.application_context import ApplicationContext
 from ..models.outbound_server import OutboundServer
 from ..subscription_loader import load_subscription
 from ..tasks import long_task
-from .core import connect_best_outbound_server, register_outbound_servers
+from .auto_connect import on_servers_changed
+from .core import register_outbound_servers
 
 
 @long_task("refresh_subscriptions", cancels=["test_outbound_servers"])
@@ -20,7 +21,8 @@ async def refresh_subscriptions(context: ApplicationContext) -> None:
     On success server_settings.last_subscription_refresh is set to the current time,
     and the stored servers are registered in the core again: both of its routes
     become blocked (see register_outbound_servers). With auto_connect on, the best
-    server is connected then, e.g. when the connected one is gone.
+    server is connected then if nothing is, e.g. when the connected one is gone
+    (auto_connect.on_servers_changed).
 
     A long task: a running test_outbound_servers is stopped first. If a refresh
     is already running, no new one starts and the caller waits for the running one.
@@ -38,7 +40,7 @@ async def refresh_subscriptions(context: ApplicationContext) -> None:
     await context.sync.notify("server_settings")
     # Last, so the database and clients are up to date even if the core fails.
     await register_outbound_servers(context)
-    await connect_best_outbound_server(context)
+    await on_servers_changed(context)
 
 
 def schedule_refresh_subscriptions(context: ApplicationContext) -> None:

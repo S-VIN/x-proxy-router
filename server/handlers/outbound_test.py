@@ -2,6 +2,11 @@
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
+from dataclasses import replace
+
+from aiohttp import ClientSession
 
 from ..models.application_context import ApplicationContext
 from ..models.outbound_server import (
@@ -10,6 +15,7 @@ from ..models.outbound_server import (
     OutboundServer,
     OutboundTransport,
 )
+from ..models.outbound_test import OutboundTest
 from ..outbound_probe import (
     PING_LIMIT,
     SPEED_TEST_BYTES,
@@ -20,7 +26,6 @@ from ..outbound_probe import (
     tcp_ping,
 )
 from ..tasks import long_task
-from .core import connect_best_outbound_server
 
 log = logging.getLogger(__name__)
 
@@ -89,24 +94,9 @@ async def test_outbound(
     if tcp:
         ping = await tcp_ping(server.address, server.port)
     if ping is not None or not tcp:
-        async with context.outbound_test_lock:
-            await context.core_client.test_connect(server.id)
-            try:
-                port = context.core_client.test_port
-                if port is None:
-                    raise RuntimeError("The core has no test endpoint")
-                async with proxy_session(port) as session:
-                    results = await asyncio.gather(
-                        *(run_test(session, test) for test in outbound_tests)
-                    )
-                    tests = {test.alias: passed for test, passed in zip(outbound_tests, results)}
-                    speed = await download_speed(session)
-            finally:
-                try:
-                    await context.core_client.test_stop()
-                except Exception:
-                    # Keep the original error; the next check switches the endpoint anyway.
-                    log.exception("Failed to stop test traffic")
+        async with _test_endpoint(context, server.id) as session:
+            tests = await _run_tests(session, outbound_tests)
+            speed = await download_speed(session)
         rating = server_rating(ping, speed, tests)
     filtered = FilterReason.BY_PING if tcp and ping is None else None
     updated = context.settings.outbound_server.update_health(
@@ -131,15 +121,80 @@ async def test_outbound_servers(context: ApplicationContext) -> None:
     Filtered servers are skipped, except by_ping ones: they are checked again,
     so a server that answers the ping comes back.
 
-    With ServerSettings.auto_connect on, the best server by the new ratings is
-    connected at the end of the run (connect_best_outbound_server).
+    At the end the checked servers are passed to auto_connect, which may switch
+    the connected server; a run stopped midway passes nothing.
     """
+    # Imported here: auto_connect checks servers with this module's functions.
+    from .auto_connect import on_check_run_finished
+
+    checked = []
     for server_id in [server.id for server in context.settings.outbound_server.get_all()]:
         server = context.settings.outbound_server.get_by_id(server_id)
         if server is None or server.filtered not in (None, FilterReason.BY_PING):
             continue
         try:
-            await test_outbound(context, server)
+            updated = await test_outbound(context, server)
         except Exception:
             log.exception("Failed to check server %s", server_id)
-    await connect_best_outbound_server(context)
+            continue
+        if updated is not None:
+            checked.append(updated)
+    await on_check_run_finished(context, checked)
+
+
+async def quick_test_outbound(
+    context: ApplicationContext, server: OutboundServer, outbound_tests: Sequence[OutboundTest]
+) -> OutboundServer:
+    """Check the server like test_outbound, without the speed test; nothing is stored.
+
+    Returns the server with the new ping, tests and rating. The rating counts
+    the speed of the server's last check (0 if unknown). A TCP server that does
+    not answer the ping gets rating 0 and filtered = by_ping, and no test runs;
+    otherwise filtered is None. The tests are given by the caller.
+
+    Without waiting for the endpoint, the check takes at most about
+    PING_LIMIT + TEST_TIMEOUT seconds.
+    """
+    tests = {test.alias: False for test in outbound_tests}
+    ping = None
+    if uses_tcp(server):
+        ping = await tcp_ping(server.address, server.port)
+        if ping is None:
+            return replace(server, ping=None, rating=0, tests=tests, filtered=FilterReason.BY_PING)
+    async with _test_endpoint(context, server.id) as session:
+        tests = await _run_tests(session, outbound_tests)
+    rating = server_rating(ping, server.speed or 0, tests)
+    return replace(server, ping=ping, rating=rating, tests=tests, filtered=None)
+
+
+@asynccontextmanager
+async def _test_endpoint(
+    context: ApplicationContext, server_id: str
+) -> AsyncIterator[ClientSession]:
+    """HTTP client through the core's test endpoint, switched to the server.
+
+    Holds outbound_test_lock, so checks of different servers wait for each other;
+    the endpoint's traffic is stopped on exit.
+    """
+    async with context.outbound_test_lock:
+        await context.core_client.test_connect(server_id)
+        try:
+            port = context.core_client.test_port
+            if port is None:
+                raise RuntimeError("The core has no test endpoint")
+            async with proxy_session(port) as session:
+                yield session
+        finally:
+            try:
+                await context.core_client.test_stop()
+            except Exception:
+                # Keep the original error; the next check switches the endpoint anyway.
+                log.exception("Failed to stop test traffic")
+
+
+async def _run_tests(
+    session: ClientSession, outbound_tests: Sequence[OutboundTest]
+) -> dict[str, bool]:
+    """Run the tests at the same time; alias -> passed."""
+    results = await asyncio.gather(*(run_test(session, test) for test in outbound_tests))
+    return {test.alias: passed for test, passed in zip(outbound_tests, results)}

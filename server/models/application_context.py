@@ -10,6 +10,7 @@ from ..tasks import TaskRegistry
 
 if TYPE_CHECKING:
     from ..cores.core_client import CoreClient
+    from ..handlers.auto_connect import AutoConnectState
     from ..main import Scheduler, WebSocketServer
     from ..model_sync import ModelSync
     from ..settings_store import SettingsStore
@@ -22,6 +23,8 @@ class ApplicationContext:
     scheduler: Scheduler
     websocket: WebSocketServer
     sync: ModelSync
+    # What handlers/auto_connect.py remembers between events.
+    auto_connect: AutoConnectState
     # Long tasks by name: refresh_subscriptions, test_outbound_servers (server/tasks.py).
     tasks: TaskRegistry = field(default_factory=TaskRegistry)
     # The core has one test endpoint, so servers are checked through it one at a time.

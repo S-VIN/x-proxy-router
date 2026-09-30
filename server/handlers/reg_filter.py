@@ -6,7 +6,8 @@ from ..models.application_context import ApplicationContext
 from ..models.reg_filter import RegFilter
 from ..models.serialization import JsonValue
 from ..request_error import ErrorCode, RequestError, expect_fields, field_value
-from .core import connect_best_outbound_server, disconnect_filtered_server
+from .auto_connect import on_servers_changed
+from .core import disconnect_filtered_server
 
 MODEL = "reg_filter"
 
@@ -44,13 +45,14 @@ async def delete_reg_filter(
 ) -> dict[str, JsonValue]:
     """payload: {id}. Servers no other filter matches lose by_reg_filter.
 
-    Such a server shows its stored reason again (by_ping) or none. With auto_connect
-    on, the best server is connected, which may now be one the filter matched.
+    Such a server shows its stored reason again (by_ping) or none, and may be
+    chosen by auto_connect again. With the mode on and nothing connected, the
+    best server is connected (auto_connect.on_servers_changed).
     """
     expect_fields(payload, {"id"})
     if not context.settings.reg_filter.delete(field_value(payload, "id", str)):
         raise RequestError(ErrorCode.NOT_FOUND, "Filter not found", {"field": "id"})
     await context.sync.notify(MODEL)
     await context.sync.notify("outbound_server")
-    await connect_best_outbound_server(context)
+    await on_servers_changed(context)
     return {}

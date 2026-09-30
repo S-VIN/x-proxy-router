@@ -15,6 +15,7 @@ from aiohttp_socks import ProxyConnector
 
 from server.cores.core_client import CoreClient
 from server.cores.mihomo.mihomo_client import MihomoClient
+from server.handlers import auto_connect
 from server.handlers import outbound_test as handler
 from server.handlers.core import connect_outbound_server, register_outbound_servers
 from server.handlers.subscriptions import refresh_subscriptions
@@ -396,6 +397,40 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updated.rating, 100)
         self.assertIsNone(updated.filtered)
 
+    async def test_quick_check_skips_the_speed_test_and_stores_nothing(self):
+        server = self.saved(vless(443, speed=round(handler.FULL_SPEED) // 2, rating=1))
+        self.run_test.side_effect = [True, False]
+        client = Client(self.context.websocket)
+        await client.messages()
+        checked = await handler.quick_test_outbound(self.context, server, self.tests)
+        self.ping.assert_awaited_once_with("127.0.0.1", 443)
+        self.core.test_connect.assert_awaited_once_with(server.id)
+        self.core.test_stop.assert_awaited_once()
+        self.speed.assert_not_awaited()
+        tests = {"google": True, "site": False}
+        # The rating counts the speed of the last check.
+        self.assertEqual(
+            (checked.ping, checked.tests, checked.rating, checked.filtered),
+            (100, tests, handler.server_rating(100, round(handler.FULL_SPEED) // 2, tests), None),
+        )
+        self.assertEqual(self.context.settings.outbound_server.get_by_id(server.id), server)
+        self.assertEqual(await client.messages(), [])
+
+    async def test_quick_check_of_an_unreachable_server_stops_after_ping(self):
+        server = self.saved(vless(443, speed=500))
+        self.ping.return_value = None
+        checked = await handler.quick_test_outbound(self.context, server, self.tests)
+        self.core.test_connect.assert_not_awaited()
+        self.run_test.assert_not_awaited()
+        self.assertEqual(
+            (checked.ping, checked.rating, checked.tests, checked.filtered),
+            (None, 0, {"google": False, "site": False}, FilterReason.BY_PING),
+        )
+        # Not pinged when it is not TCP; unknown speed counts as 0.
+        checked = await handler.quick_test_outbound(self.context, hysteria(), self.tests[:1])
+        self.ping.assert_awaited_once()
+        self.assertEqual(checked.rating, handler.server_rating(None, 0, {"google": True}))
+
     async def test_endpoint_is_released_when_a_check_fails(self):
         server = self.saved(vless(443))
         self.speed.side_effect = RuntimeError("probe failure")
@@ -610,19 +645,42 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         await handler.test_outbound_servers(self.context)
         self.core.test_connect.assert_not_awaited()
 
-    async def test_run_connects_the_best_server_in_auto_mode(self):
+    async def test_run_passes_the_checked_servers_to_auto_connect(self):
+        first, broken, filtered = self.saved(vless(1)), self.saved(vless(2)), self.saved(vless(3))
+        self.context.settings.reg_filter.add(RegFilter(reg=f"^{filtered.name}$"))
+
+        async def connect(server_id):
+            if server_id == broken.id:
+                raise RuntimeError("not registered")
+
+        self.core.test_connect.side_effect = connect
+        finished = self.enterContext(
+            patch("server.handlers.auto_connect.on_check_run_finished", new_callable=AsyncMock)
+        )
+        with self.assertLogs("server.handlers.outbound_test", level="ERROR"):
+            await handler.test_outbound_servers(self.context)
+        [call] = finished.await_args_list
+        self.assertEqual(
+            call.args, (self.context, [self.context.settings.outbound_server.get_by_id(first.id)])
+        )
+
+    async def test_run_switches_to_a_better_server_in_auto_mode(self):
         slow, fast = self.saved(vless(1)), self.saved(vless(2))
         self.ping.side_effect = lambda address, port: {1: 400, 2: 20}[port]
-        await handler.test_outbound_servers(self.context)
-        self.core.outbound_connect.assert_not_awaited()
         settings = self.context.settings.server_settings
         settings.save(replace(settings.get(), auto_connect=True))
         self.context.settings.outbound_server.set_connected(slow.id)
+        # The better server has to stay ahead for two runs.
+        await handler.test_outbound_servers(self.context)
+        self.core.outbound_connect.assert_not_awaited()
+        self.ping.reset_mock()
         await handler.test_outbound_servers(self.context)
         self.core.outbound_connect.assert_awaited_once_with(fast.id)
         connected = self.context.settings.outbound_server.get_connected()
         assert connected is not None
         self.assertEqual(connected.id, fast.id)
+        # Both were checked in the run, and the better one once more before connecting.
+        self.assertEqual([call.args[1] for call in self.ping.await_args_list], [1, 2, 2])
 
 
 class MihomoCheckTests(ListenerTestCase):
@@ -778,3 +836,37 @@ class MihomoCheckTests(ListenerTestCase):
             (None, None, 0, {"a": False}),
         )
         self.assertEqual(self.requests, [])
+
+    async def test_auto_connect_leaves_a_server_that_fails_quick_checks(self):
+        base = f"http://127.0.0.1:{self.http_port}"
+        test = outbound_test("204", f"{base}/status/204", OutboundTestRule.STATUS_204)
+        self.context.settings.server_settings.save(ServerSettings(outbound_tests=(test,)))
+
+        async def broken(reader, writer):
+            pass  # Accepts TCP, so it answers the ping, but proxies nothing.
+
+        failing, working = vless(await self.listen(broken)), vless(self.relay_port)
+        store = self.context.settings.outbound_server
+        store.add_servers([failing, working])
+        for server, rating in ((failing, 90), (working, 80)):
+            store.update_health(
+                server.id, ping=1, speed=None, rating=rating, tests={}, filtered=None
+            )
+        await register_outbound_servers(self.context)
+        await connect_outbound_server(self.context, failing.id)
+        settings = self.context.settings.server_settings
+        settings.save(replace(settings.get(), auto_connect=True))
+        now = 1000.0
+        with patch.object(auto_connect, "monotonic", lambda: now):
+            await auto_connect.on_auto_connect_enabled(self.context)
+            for _ in range(auto_connect.FAILED_CHECKS):
+                await auto_connect.watch_connected_server(self.context)
+                now += auto_connect.RETRY_INTERVAL
+        connected = store.get_connected()
+        assert connected is not None
+        self.assertEqual(connected.id, working.id)
+        proxies = (await self.core.rest_client.get_proxies())["proxies"]
+        self.assertEqual(proxies["main"]["now"], working.id)
+        self.assertEqual(proxies["test"]["now"], "REJECT")
+        # The working server was checked through the relay before it was connected.
+        self.assertEqual(self.requests, [("/status/204", "")])

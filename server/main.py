@@ -23,7 +23,13 @@ from apscheduler.triggers.base import BaseTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .cores.mihomo.mihomo_client import MihomoClient
-from .handlers.core import connect_best_outbound_server, register_outbound_servers
+from .handlers.auto_connect import (
+    RETRY_INTERVAL,
+    AutoConnectState,
+    on_servers_changed,
+    watch_connected_server,
+)
+from .handlers.core import register_outbound_servers
 from .handlers.init import init
 from .handlers.outbound_test import test_outbound_servers
 from .handlers.reg_filter import add_reg_filter, delete_reg_filter
@@ -446,7 +452,8 @@ async def application() -> AsyncIterator[ApplicationContext]:
 
     The core is started and the stored servers are registered in it before the
     application is ready; if the core cannot start, the application does not start.
-    With auto_connect on, the best stored server is connected then as well.
+    With auto_connect on, the best stored server is connected then if nothing is
+    (handlers/auto_connect.py).
     """
     with SettingsStore() as settings:
         core_client = MihomoClient()
@@ -459,13 +466,15 @@ async def application() -> AsyncIterator[ApplicationContext]:
         sync.register(ModelChannel("outbound_server", settings.outbound_server.get_all))
         tasks = TaskRegistry(on_change=partial(sync.notify, "task"))
         sync.register(ModelChannel("task", tasks.states))
-        context = ApplicationContext(settings, core_client, scheduler, websocket, sync, tasks=tasks)
+        context = ApplicationContext(
+            settings, core_client, scheduler, websocket, sync, AutoConnectState(), tasks=tasks
+        )
         init_task = None
         try:
             scheduler.start()
             await core_client.service_start(PROXY_PORT, TEST_PORT)
             await register_outbound_servers(context)
-            await connect_best_outbound_server(context)
+            await on_servers_changed(context)
             await websocket.start(WEBSOCKET_HOST, WEBSOCKET_PORT, static_dir=WEB_CLIENT_DIR)
             init_task = asyncio.create_task(init(context), name="application-init")
             yield context
@@ -497,6 +506,12 @@ def configure_handlers(context: ApplicationContext) -> None:
         partial(test_outbound_servers, context),
         IntervalTrigger(hours=1),
         id="test_outbound_servers",
+    )
+    # Quick checks of the connected server while auto_connect is on.
+    context.scheduler.add_job(
+        partial(watch_connected_server, context),
+        IntervalTrigger(seconds=RETRY_INTERVAL),
+        id="watch_connected_server",
     )
     websocket = context.websocket
     websocket.register("add", "subscription_link", partial(add_subscription_link, context))
