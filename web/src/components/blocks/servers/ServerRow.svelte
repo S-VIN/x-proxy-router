@@ -2,7 +2,7 @@
   import { describeError } from '../../../lib/api/errors';
   import type { OutboundServer, OutboundTest } from '../../../lib/api/protocol';
   import { filterText } from '../../../lib/format';
-  import { outboundServers } from '../../../lib/stores';
+  import { outboundServers, serverSettings } from '../../../lib/stores';
   import Badge from '../../ui/Badge.svelte';
   import Button from '../../ui/Button.svelte';
   import Icon from '../../ui/Icon.svelte';
@@ -89,7 +89,17 @@
       {:else if server.filtered !== null}
         <Badge title="Cannot be connected. {filterText(server.filtered)}">Filtered</Badge>
       {:else}
-        <Button size="sm" busy={connecting} disabled={!ready} onclick={connect}>Connect</Button>
+        <Button
+          size="sm"
+          busy={connecting}
+          disabled={!ready}
+          title={serverSettings.current?.auto_connect
+            ? 'Connect this server and turn auto-connect off'
+            : undefined}
+          onclick={connect}
+        >
+          Connect
+        </Button>
       {/if}
     </div>
   </div>

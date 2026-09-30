@@ -71,8 +71,9 @@
 
   .header {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: var(--space-2);
+    gap: var(--space-1) var(--space-2);
     min-height: calc(var(--control-height-sm) + var(--space-2));
     padding: var(--space-2) var(--space-2) 0 var(--space-3);
   }
