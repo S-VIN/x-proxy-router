@@ -4,6 +4,7 @@ import type { ModelName } from '../api/protocol';
 import { applyMessage } from './collection.svelte';
 import { OutboundServersStore } from './outboundServers.svelte';
 import { RegFiltersStore } from './regFilters.svelte';
+import { ServerSettingsStore } from './serverSettings.svelte';
 import { linkColors, linkLabels, SubscriptionLinksStore } from './subscriptionLinks.svelte';
 import { TasksStore } from './tasks.svelte';
 
@@ -136,6 +137,22 @@ describe('stores', () => {
       ['add/reg_filter', { reg: ' US$' }],
       ['delete/reg_filter', { id: 'f2' }],
     ]);
+  });
+
+  it('follow auto-connect and send its changes', () => {
+    const { connection, deliver } = fakeConnection();
+    const sent: unknown[] = [];
+    connection.request = ((key: string, payload: unknown) => {
+      sent.push([key, payload]);
+      return Promise.resolve({});
+    }) as Connection['request'];
+    const settings = new ServerSettingsStore(connection);
+    deliver('server_settings', [{ id: 0, auto_connect: false }]);
+    expect(settings.current?.auto_connect).toBe(false);
+    void settings.setAutoConnect(true);
+    expect(sent).toEqual([['change/server_settings', { id: 0, auto_connect: true }]]);
+    deliver('server_settings', [{ id: 0, auto_connect: true }], false);
+    expect(settings.current?.auto_connect).toBe(true);
   });
 
   it('follow task status', () => {

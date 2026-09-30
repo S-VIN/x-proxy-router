@@ -9,6 +9,7 @@
   } from '../../lib/format';
   import { outboundServers, serverSettings, subscriptionLinks } from '../../lib/stores';
   import Block from '../layout/Block.svelte';
+  import Badge from '../ui/Badge.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import Stat from '../ui/Stat.svelte';
   import Tag from '../ui/Tag.svelte';
@@ -16,6 +17,7 @@
   let { order }: { order: number } = $props();
 
   const server = $derived(outboundServers.connected);
+  const autoConnect = $derived(serverSettings.current?.auto_connect ?? false);
   const tests = $derived(serverSettings.current?.outbound_tests ?? []);
   const passed = $derived(
     server?.tests ? tests.filter((test) => server?.tests?.[test.alias] === true).length : null,
@@ -26,7 +28,9 @@
   title="Connection"
   icon="route"
   {order}
-  hint="The server your traffic goes through. To switch, press Connect on another server."
+  hint={autoConnect
+    ? 'The server your traffic goes through. Auto-connect picks it and switches when it fails or gets worse; pressing Connect on another server turns auto-connect off.'
+    : 'The server your traffic goes through. To switch, press Connect on another server.'}
 >
   {#if serverSettings.current === null}
     <EmptyState compact loading title="Loading…" />
@@ -35,7 +39,9 @@
       compact
       icon="plug"
       title="No server selected"
-      hint="Pick a server in the list and press Connect to send traffic through it."
+      hint={autoConnect
+        ? 'Auto-connect will connect the best server once servers are checked.'
+        : 'Pick a server in the list and press Connect to send traffic through it.'}
     />
   {:else}
     <div class="current">
@@ -45,6 +51,11 @@
           {subscriptionLinks.label(server.subscription_id)}
         </Tag>
         <span class="stack">{stackLabel(server)}</span>
+        {#if autoConnect}
+          <Badge tone="accent" title="Auto-connect is on and may switch to another server"
+            >Auto</Badge
+          >
+        {/if}
       </p>
     </div>
     <dl class="stats">

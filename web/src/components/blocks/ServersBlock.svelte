@@ -22,6 +22,7 @@
   import EmptyState from '../ui/EmptyState.svelte';
   import Notice from '../ui/Notice.svelte';
   import Select, { type Option } from '../ui/Select.svelte';
+  import Switch from '../ui/Switch.svelte';
   import TextField from '../ui/TextField.svelte';
   import ServerRow from './servers/ServerRow.svelte';
 
@@ -37,12 +38,16 @@
   let sort = $state<SortKey>('rating');
   let expanded = $state<string | null>(null);
   let checkError = $state<string | null>(null);
+  // The state asked for while the request runs; the server's state otherwise.
+  let autoConnectPending = $state<boolean | null>(null);
+  let autoConnectError = $state<string | null>(null);
 
   const tests = $derived(serverSettings.current?.outbound_tests ?? []);
   // Room for a mark per test (8px and a 3px gap), at least for the "Tests" heading.
   const testsWidth = $derived(`${Math.max(36, tests.length * 11 - 3)}px`);
   const total = $derived(outboundServers.list.length);
   const loading = $derived(serverSettings.current === null);
+  const autoConnect = $derived(serverSettings.current?.auto_connect ?? false);
 
   function knownSubscription(server: OutboundServer): boolean {
     return server.subscription_id !== null && subscriptionLinks.labels.has(server.subscription_id);
@@ -134,6 +139,18 @@
     protocol = ALL;
   }
 
+  async function setAutoConnect(enabled: boolean) {
+    autoConnectPending = enabled;
+    autoConnectError = null;
+    try {
+      await serverSettings.setAutoConnect(enabled);
+    } catch (reason) {
+      autoConnectError = describeError(reason);
+    } finally {
+      autoConnectPending = null;
+    }
+  }
+
   async function checkAll() {
     checkError = null;
     try {
@@ -154,9 +171,22 @@
   fill
   flush
   meta={loading ? undefined : filtersActive ? `${rows.length} of ${total}` : String(total)}
-  hint="Click a server for details. Filtered servers are grayed out at the end of the list and cannot be connected. A check measures ping and speed and runs the tests through every server, one by one; rows keep their places until it ends."
+  hint="Click a server for details. Filtered servers are grayed out at the end of the list and cannot be connected. A check measures ping and speed and runs the tests through every server, one by one; rows keep their places until it ends. With auto-connect on, the router picks the server itself and switches when it fails or gets worse; connecting a server by hand turns auto-connect off."
 >
   {#snippet actions()}
+    <Switch
+      label="Auto-connect"
+      shortLabel="Auto"
+      checked={autoConnectPending ?? autoConnect}
+      busy={autoConnectPending !== null}
+      disabled={!connection.ready || loading}
+      title={autoConnectPending === true
+        ? 'Checking servers to choose one…'
+        : autoConnect
+          ? 'The router picks the server and switches when it fails or gets worse. Connecting a server by hand turns this off.'
+          : 'Let the router pick the best server and switch when it fails or gets worse'}
+      onchange={setAutoConnect}
+    />
     <Button
       size="sm"
       icon="gauge"
@@ -194,6 +224,9 @@
       <Select size="sm" aria-label="Protocol" bind:value={protocol} options={protocolOptions} />
       <Select size="sm" aria-label="Sort" bind:value={sort} options={sortOptions} />
     </div>
+    {#if autoConnectError}
+      <Notice tone="danger" ondismiss={() => (autoConnectError = null)}>{autoConnectError}</Notice>
+    {/if}
     {#if checkError}
       <Notice tone="danger" ondismiss={() => (checkError = null)}>{checkError}</Notice>
     {/if}

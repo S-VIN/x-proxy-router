@@ -2,7 +2,7 @@ import type { Connection } from '../api/connection.svelte';
 import type { OutboundTest } from '../api/protocol';
 import { Collection } from './collection.svelte';
 
-/** Server-wide settings: the refresh interval and the tests servers are checked with. */
+/** Server-wide settings: the refresh interval, the tests servers are checked with, auto-connect. */
 export class ServerSettingsStore {
   #connection: Connection;
   #collection = new Collection<'server_settings'>();
@@ -25,5 +25,13 @@ export class ServerSettingsStore {
   /** Replaces the whole list of tests. */
   setOutboundTests(tests: OutboundTest[]) {
     return this.#connection.request('change/server_settings', { id: 0, outbound_tests: tests });
+  }
+
+  /**
+   * Turning auto-connect on resolves after the server has chosen a server, which
+   * takes a few seconds: candidates are checked before connecting.
+   */
+  setAutoConnect(enabled: boolean) {
+    return this.#connection.request('change/server_settings', { id: 0, auto_connect: enabled });
   }
 }

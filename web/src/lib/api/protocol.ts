@@ -26,6 +26,8 @@ export interface ServerSettings {
   /** ISO 8601 UTC time of the last successful refresh. */
   last_subscription_refresh: string | null;
   outbound_tests: OutboundTest[];
+  /** The server chooses the connected server itself; a client's choice turns it off. */
+  auto_connect: boolean;
 }
 
 export interface SubscriptionLink {
@@ -157,7 +159,12 @@ export interface Requests {
   'add/reg_filter': { payload: { reg: string }; result: { id: string } };
   'delete/reg_filter': { payload: { id: string }; result: Empty };
   'change/server_settings': {
-    payload: { id: 0; subscription_refresh_interval?: number; outbound_tests?: OutboundTest[] };
+    payload: {
+      id: 0;
+      subscription_refresh_interval?: number;
+      outbound_tests?: OutboundTest[];
+      auto_connect?: boolean;
+    };
     result: Empty;
   };
   'request/refresh_subscriptions': { payload: Empty; result: Empty };
