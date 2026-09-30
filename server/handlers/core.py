@@ -82,7 +82,7 @@ async def connect_outbound_server(
             return None
         if server.filtered is not None:
             raise ServerFiltered(f"Server {server_id} is filtered: {server.filtered}")
-        server = await _switch(context, server_id)
+        server = await switch_connected_server(context, server_id)
         # Under the lock, so auto_connect cannot replace the chosen server meanwhile.
         _turn_auto_connect_off(context)
     await context.sync.notify("server_settings")
@@ -120,50 +120,13 @@ def _turn_auto_connect_off(context: ApplicationContext) -> None:
         context.settings.server_settings.save(replace(settings, auto_connect=False))
 
 
-def _rating(server: OutboundServer) -> int:
-    """Rating for choosing a server: an unchecked one (None) counts as 0."""
-    return server.rating or 0
-
-
-async def connect_best_outbound_server(context: ApplicationContext) -> None:
-    """With ServerSettings.auto_connect on, connect the server with the best rating.
-
-    Only servers that are not filtered and rated above 0 are chosen. The connected
-    server stays unless another one is rated higher, so servers with equal ratings
-    do not take turns; a connected server filtered by ping is replaced by any such
-    server (one filtered by name is disconnected: disconnect_filtered_server).
-    If the core cannot connect a server, the next best is tried; failures are only
-    logged. Nothing changes when the mode is off or no server is better.
-
-    Runs when a client turns the mode on and whenever ratings, servers or filters
-    change: after a check run, a subscription refresh, startup and a filter deletion.
-    """
-    async with context.core_lock:
-        # Read under the lock: a client that connected a server meanwhile turned it off.
-        if not context.settings.server_settings.get().auto_connect:
-            return
-        servers = context.settings.outbound_server.get_all()
-        connected = next((server for server in servers if server.is_connected), None)
-        floor = _rating(connected) if connected is not None and connected.filtered is None else 0
-        better = [
-            server for server in servers if server.filtered is None and _rating(server) > floor
-        ]
-        # Stable: servers with equal ratings keep their stored order.
-        for server in sorted(better, key=_rating, reverse=True):
-            try:
-                await _switch(context, server.id)
-            except CoreError:
-                continue
-            break
-        else:
-            return
-    await context.sync.notify("outbound_server")
-
-
-async def _switch(context: ApplicationContext, server_id: str) -> OutboundServer | None:
+async def switch_connected_server(
+    context: ApplicationContext, server_id: str
+) -> OutboundServer | None:
     """Connect the core's main route to a stored server and mark it; hold core_lock.
 
     Raises CoreError if the core cannot connect it; nothing is marked then.
+    Clients are not notified: the caller sends outbound_server.
     """
     try:
         await context.core_client.outbound_connect(server_id)

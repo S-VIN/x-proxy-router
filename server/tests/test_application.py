@@ -14,6 +14,7 @@ from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from server.cores.core_client import CoreClient
+from server.handlers.auto_connect import RETRY_INTERVAL, watch_connected_server
 from server.handlers.outbound_test import test_outbound_servers
 from server.handlers.subscriptions import refresh_subscriptions
 from server.main import PROXY_PORT, TEST_PORT, WebSocketServer, application, configure_handlers
@@ -318,6 +319,15 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(job.trigger.interval, timedelta(hours=1))
             handler = job.args[0]
             self.assertIs(handler.func, test_outbound_servers)
+            self.assertEqual(handler.args, (context,))
+
+    async def test_connected_server_is_watched_every_retry_interval(self):
+        async with application() as context:
+            configure_handlers(context)
+            job = context.scheduler._scheduler.get_job("watch_connected_server")
+            self.assertEqual(job.trigger.interval, timedelta(seconds=RETRY_INTERVAL))
+            handler = job.args[0]
+            self.assertIs(handler.func, watch_connected_server)
             self.assertEqual(handler.args, (context,))
 
     async def test_subscriptions_refresh_every_interval(self):

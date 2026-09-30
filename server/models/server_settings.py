@@ -17,8 +17,8 @@ class ServerSettings:
     last_subscription_refresh: datetime | None = None
     # Checks run against every outbound server; aliases are unique.
     outbound_tests: tuple[OutboundTest, ...] = ()
-    # The server keeps the best server by rating connected (handlers/core.py,
-    # connect_best_outbound_server). Turned off when a client connects a server itself.
+    # The server chooses the connected server itself (handlers/auto_connect.py).
+    # Turned off when a client connects a server itself.
     auto_connect: bool = False
 
     def __post_init__(self):
