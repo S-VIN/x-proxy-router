@@ -1,16 +1,17 @@
-"""A regular expression that filters outbound servers by name."""
+"""A pattern that filters outbound servers by name."""
 
-import re
 from dataclasses import dataclass, field
 from uuid import uuid4
+
+from .pattern import pattern_matches
 
 
 @dataclass(frozen=True, kw_only=True)
 class RegFilter:
     """Servers whose name matches reg get OutboundServer.filtered = by_reg_filter.
 
-    reg is a Python regular expression found anywhere in the name, case
-    sensitive; (?i) at its start ignores case.
+    reg is a pattern (models/pattern.py) compared with the whole name, ignoring
+    case: *RU* finds "🇷🇺 RU Moscow". Any characters are allowed, as in names.
     """
 
     id: str = field(default_factory=lambda: str(uuid4()))
@@ -20,12 +21,7 @@ class RegFilter:
         if not self.id:
             raise ValueError("Filter id must not be empty")
         if not self.reg:
-            raise ValueError("Filter regular expression must not be empty")
-        try:
-            re.compile(self.reg)
-        except re.error as error:
-            raise ValueError(f"Invalid regular expression: {error}") from None
+            raise ValueError("Filter pattern must not be empty")
 
     def matches(self, name: str) -> bool:
-        # re caches compiled expressions, so repeated reads do not compile again.
-        return re.search(self.reg, name) is not None
+        return pattern_matches(self.reg, name)

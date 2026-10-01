@@ -3,13 +3,19 @@
 import asyncio
 import socket
 
-from ...models import CoreState, InboundServer, OutboundServer
+from ...models import CoreState, InboundServer, OutboundServer, RoutingAction, RoutingRule
+from ...models.pattern import WILDCARD
 from ..core_client import CoreClient, proxy_address
 from .mihomo_process_manager import MihomoError, MihomoProcessManager
 from .mihomo_rest_client import MihomoRestClient
 from .outbound_config import outbound_config
 
 _BLOCKED = "REJECT"
+_ACTION_TARGETS = {
+    RoutingAction.PROXY: "main",
+    RoutingAction.DIRECT: "DIRECT",
+    RoutingAction.BLOCK: _BLOCKED,
+}
 
 
 def inbound_config(inbound: InboundServer) -> dict:
@@ -27,12 +33,42 @@ def inbound_config(inbound: InboundServer) -> dict:
     return config
 
 
+def domain_regex(pattern: str) -> str:
+    """The Mihomo DOMAIN-REGEX for a domain pattern; Mihomo ignores case itself.
+
+    The regex matches the whole domain. Atomic groups take each part between
+    wildcards at its first occurrence, as models.pattern does, so Mihomo's
+    backtracking engine never retries them on long domains.
+    """
+    first, *parts = (part.replace(".", r"\.") for part in pattern.split(WILDCARD))
+    if not parts:
+        return f"^{first}$"
+    *middle, last = parts
+    return f"^{first}{''.join(f'(?>.*?{part})' for part in middle if part)}.*{last}$"
+
+
+def routing_rule_config(rule: RoutingRule) -> str:
+    """The Mihomo rule for a routing rule."""
+    target = _ACTION_TARGETS[rule.action]
+    if rule.reg == WILDCARD:
+        # A domain regex would match IP destinations too, as their domain is empty.
+        return f"MATCH,{target}"
+    network = rule.network
+    if network is not None:
+        kind = "IP-CIDR" if network.version == 4 else "IP-CIDR6"
+        # Without no-resolve Mihomo would look up every domain to compare its address,
+        # sending DNS queries for proxied domains from this computer.
+        return f"{kind},{network},{target},no-resolve"
+    return f"DOMAIN-REGEX,{domain_regex(rule.reg)},{target}"
+
+
 class MihomoClient(CoreClient):
     """Mihomo takes its whole config at once, so the client remembers what it applied.
 
-    The registered servers, the inbounds and the server selected for each route
-    are kept to build the next config. Changes of the config and of the routes
-    are serialized, so an inbound change may run while a server is checked.
+    The registered servers, the inbounds, the routing rules and the server
+    selected for each route are kept to build the next config. Changes of the
+    config and of the routes are serialized, so an inbound change may run while
+    a server is checked.
     """
 
     def __init__(self):
@@ -41,6 +77,7 @@ class MihomoClient(CoreClient):
         self.test_port: int | None = None
         self._servers: list[OutboundServer] = []
         self._inbounds: dict[str, InboundServer] = {}
+        self._rules: list[RoutingRule] = []
         self._selected = {"main": _BLOCKED, "test": _BLOCKED}
         self._lock = asyncio.Lock()
 
@@ -80,6 +117,7 @@ class MihomoClient(CoreClient):
             self.test_port = None
             self._servers = []
             self._inbounds = {}
+            self._rules = []
             self._selected = {"main": _BLOCKED, "test": _BLOCKED}
 
     async def outbound_register(self, servers: list[OutboundServer]) -> None:
@@ -88,7 +126,7 @@ class MihomoClient(CoreClient):
         self._validate_server_ids(servers)
         selected = {"main": _BLOCKED, "test": _BLOCKED}
         async with self._lock:
-            await self._apply(servers, self._inbounds, selected)
+            await self._apply(servers=servers, selected=selected)
             self._servers, self._selected = list(servers), selected
 
     async def outbound_delete_all(self) -> None:
@@ -116,12 +154,12 @@ class MihomoClient(CoreClient):
                 return
             self._check_inbound_available(old, inbound)
             inbounds = {**self._inbounds, inbound.id: inbound}
-            await self._apply(self._servers, inbounds, self._selected)
+            await self._apply(inbounds=inbounds)
             try:
                 # Mihomo accepts a listener it cannot open and only logs the error.
                 await self._check_inbound_listening(inbound)
             except BaseException:
-                await self._apply(self._servers, self._inbounds, self._selected)
+                await self._apply()
                 raise
             self._inbounds = inbounds
 
@@ -131,8 +169,15 @@ class MihomoClient(CoreClient):
             if inbound_id not in self._inbounds:
                 return
             inbounds = {id_: item for id_, item in self._inbounds.items() if id_ != inbound_id}
-            await self._apply(self._servers, inbounds, self._selected)
+            await self._apply(inbounds=inbounds)
             self._inbounds = inbounds
+
+    async def routing_set(self, rules: list[RoutingRule]) -> None:
+        self._require_started()
+        rules = sorted(rules, key=lambda rule: rule.priority)
+        async with self._lock:
+            await self._apply(rules=rules)
+            self._rules = rules
 
     async def _select(self, group: str, name: str) -> None:
         self._require_started()
@@ -142,22 +187,34 @@ class MihomoClient(CoreClient):
 
     async def _apply(
         self,
-        servers: list[OutboundServer],
-        inbounds: dict[str, InboundServer],
-        selected: dict[str, str],
+        *,
+        servers: list[OutboundServer] | None = None,
+        inbounds: dict[str, InboundServer] | None = None,
+        rules: list[RoutingRule] | None = None,
+        selected: dict[str, str] | None = None,
     ) -> None:
-        await self.rest_client.replace_config(self._build_config(servers, inbounds, selected))
+        """Send a config with the given parts; omitted parts stay as applied."""
+        await self.rest_client.replace_config(
+            self._build_config(
+                self._servers if servers is None else servers,
+                self._inbounds if inbounds is None else inbounds,
+                self._rules if rules is None else rules,
+                self._selected if selected is None else selected,
+            )
+        )
 
     def _build_config(
         self,
         servers: list[OutboundServer],
         inbounds: dict[str, InboundServer],
+        rules: list[RoutingRule],
         selected: dict[str, str],
     ) -> dict:
-        """Build a fresh config from the bootstrap template, the test port, servers and inbounds.
+        """Build a fresh config from the bootstrap template, the test port and the parts.
 
         A select group starts at its first proxy, so the selected one goes first:
-        a new config keeps both routes where they were.
+        a new config keeps both routes where they were. The test endpoint's rule
+        goes before the routing rules, which then apply to the inbounds only.
         """
         config = self.process_manager._generate_config()
         config["proxies"] = [outbound_config(server, server.id) for server in servers]
@@ -185,6 +242,7 @@ class MihomoClient(CoreClient):
         ]
         config["rules"] = [
             "IN-NAME,test,test",
+            *(routing_rule_config(rule) for rule in rules),
             *(f"IN-NAME,{inbound_id},main" for inbound_id in inbounds),
             f"MATCH,{_BLOCKED}",
         ]

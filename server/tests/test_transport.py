@@ -70,7 +70,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             return await ws.receive_json()
 
     async def snapshots(self, ws) -> list[dict]:
-        return [await self.receive(ws) for _ in range(6)]
+        return [await self.receive(ws) for _ in range(7)]
 
     async def test_snapshot_request_and_response_over_the_network(self):
         async with self.session.ws_connect(self.url) as ws:
@@ -83,6 +83,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
                     ("subscription", "reg_filter", True),
                     ("subscription", "outbound_server", True),
                     ("subscription", "inbound_server", True),
+                    ("subscription", "routing_rule", True),
                     ("subscription", "task", True),
                 ],
             )

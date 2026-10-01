@@ -120,7 +120,7 @@ class ChoiceTests(AutoConnectTestCase):
         self.rate(named, 100)
         self.rate(no_ping, 95, FilterReason.BY_PING)
         self.rate(zero, 0)
-        self.context.settings.reg_filter.add(RegFilter(reg="^3$"))
+        self.context.settings.reg_filter.add(RegFilter(reg="3"))
         # The mode is off by default.
         await on_servers_changed(self.context)
         await self.tick()
@@ -450,7 +450,7 @@ class ServerListTests(AutoConnectTestCase):
             if server.id == self.first.id:
                 self.store.delete(self.first.id)
             if server.id == self.second.id:
-                self.context.settings.reg_filter.add(RegFilter(reg="^two$"))
+                self.context.settings.reg_filter.add(RegFilter(reg="two"))
             return await self.quick_test(context, server, tests)
 
         with patch.object(auto_connect, "quick_test_outbound", check):

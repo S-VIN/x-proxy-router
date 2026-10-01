@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from contextlib import suppress
 from ipaddress import ip_address
 
-from ..models import InboundServer, InboundType, OutboundServer
+from ..models import InboundServer, InboundType, OutboundServer, RoutingRule
 
 # Names the cores use for their own objects: groups, listeners, special outbounds.
 _RESERVED_IDS = frozenset(
@@ -144,7 +144,7 @@ class CoreClient(ABC):
 
     @abstractmethod
     async def service_start(self, test_port: int) -> None:
-        """Start the core with the test endpoint only: no inbounds, no servers."""
+        """Start the core with the test endpoint only: no inbounds, servers or routing rules."""
         ...
 
     @abstractmethod
@@ -154,9 +154,10 @@ class CoreClient(ABC):
     async def inbound_set(self, inbound: InboundServer) -> None:
         """Start the inbound's listener, or replace the running one with the same id.
 
-        Its traffic takes the main route (outbound_connect, outbound_disconnect).
-        Registered servers and both routes are kept, so a running server check
-        and the connection are not interrupted; an unchanged listener keeps its
+        Its traffic follows the routing rules (routing_set); the rest takes the
+        main route (outbound_connect, outbound_disconnect). Registered servers,
+        the rules and both routes are kept, so a running server check and the
+        connection are not interrupted; an unchanged listener keeps its
         connections. Raises InboundError if the address or port cannot be
         listened on; the previous listener with this id is then kept as it was.
         """
@@ -168,16 +169,27 @@ class CoreClient(ABC):
         ...
 
     @abstractmethod
-    async def outbound_register(self, servers: list[OutboundServer]) -> None:
-        """Replace ALL registered servers and reset both routes to blocked; keep inbounds.
+    async def routing_set(self, rules: list[RoutingRule]) -> None:
+        """Replace all routing rules of the inbounds' traffic; the first match by priority wins.
 
-        Empty list deletes all. IDs must be unique.
+        Traffic no rule matches takes the main route; the test endpoint ignores
+        the rules. Servers, inbounds and both routes are kept: open connections
+        keep the way they took, new ones follow the new rules. On an error the
+        core keeps the previous rules.
+        """
+        ...
+
+    @abstractmethod
+    async def outbound_register(self, servers: list[OutboundServer]) -> None:
+        """Replace ALL registered servers and reset both routes to blocked.
+
+        Inbounds and routing rules are kept. Empty list deletes all. IDs must be unique.
         """
         ...
 
     @abstractmethod
     async def outbound_delete_all(self) -> None:
-        """Delete application servers and block both routes; keep listeners."""
+        """Delete application servers and block both routes; keep listeners and routing rules."""
         ...
 
     @abstractmethod

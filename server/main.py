@@ -44,6 +44,12 @@ from .handlers.requests import (
     request_refresh_subscriptions,
     request_test_outbound_servers,
 )
+from .handlers.routing_rule import (
+    add_routing_rule,
+    apply_routing_rules,
+    change_routing_rule,
+    delete_routing_rule,
+)
 from .handlers.server_settings import change_server_settings
 from .handlers.subscription_link import (
     add_subscription_link,
@@ -455,9 +461,10 @@ class WebSocketServer:
 async def application() -> AsyncIterator[ApplicationContext]:
     """Create shared services; stop jobs and the core before closing SQLite.
 
-    The core is started, the stored inbounds listen and the stored servers are
-    registered before the application is ready. If the core cannot start, the
-    application does not start; an inbound that cannot listen keeps its error.
+    The core is started, takes the stored routing rules, the stored inbounds
+    listen and the stored servers are registered before the application is
+    ready. If the core cannot start or take the rules, the application does not
+    start; an inbound that cannot listen keeps its error.
     With auto_connect on, the best stored server is connected then if nothing is
     (handlers/auto_connect.py).
     """
@@ -471,6 +478,7 @@ async def application() -> AsyncIterator[ApplicationContext]:
         sync.register(ModelChannel("reg_filter", settings.reg_filter.get_all))
         sync.register(ModelChannel("outbound_server", settings.outbound_server.get_all))
         sync.register(ModelChannel("inbound_server", settings.inbound_server.get_all))
+        sync.register(ModelChannel("routing_rule", settings.routing_rule.get_all))
         tasks = TaskRegistry(on_change=partial(sync.notify, "task"))
         sync.register(ModelChannel("task", tasks.states))
         context = ApplicationContext(
@@ -480,6 +488,8 @@ async def application() -> AsyncIterator[ApplicationContext]:
         try:
             scheduler.start()
             await core_client.service_start(TEST_PORT)
+            # Before the inbounds, so their traffic follows the rules from the start.
+            await apply_routing_rules(context)
             await start_inbound_servers(context)
             await register_outbound_servers(context)
             await on_servers_changed(context)
@@ -530,6 +540,9 @@ def configure_handlers(context: ApplicationContext) -> None:
     websocket.register("add", "inbound_server", partial(add_inbound_server, context))
     websocket.register("change", "inbound_server", partial(change_inbound_server, context))
     websocket.register("delete", "inbound_server", partial(delete_inbound_server, context))
+    websocket.register("add", "routing_rule", partial(add_routing_rule, context))
+    websocket.register("change", "routing_rule", partial(change_routing_rule, context))
+    websocket.register("delete", "routing_rule", partial(delete_routing_rule, context))
     websocket.register("change", "server_settings", partial(change_server_settings, context))
     websocket.register(
         "request", "refresh_subscriptions", partial(request_refresh_subscriptions, context)
