@@ -711,88 +711,60 @@ await context.tasks.cancel_all()  # при остановке приложени
 
 ## Управление ядрами
 
-Реализация Mihomo с тем же `CoreClient`, REST API и отдельным тестовым SOCKS:
-[документация Mihomo](cores/mihomo/README.md).
+Приложение работает на ядре Mihomo. Хендлеры обращаются к нему только через
+общий интерфейс `CoreClient` (раздел «Клиент приложения»); реализация
+`MihomoClient` выбирается в `main.py`. Ниже — составные части этой реализации
+в `server/cores/mihomo/`.
 
-## Управление Xray
+## Процесс Mihomo
 
-Общий `CoreClient` предоставляет командный интерфейс: запуск с тестовым
-SOCKS-портом, inbound (`inbound_set`, `inbound_delete`), полная замена списка через
-`outbound_register(servers)`, выбор сервера по `id` и `outbound_delete_all()`. Имена
-outbounds равны `OutboundServer.id` без префикса. Замена списка сбрасывает оба
-маршрута в блокировку; у Xray она не атомарна.
-
-Python **3.11+**. Установка зависимостей: `python -m pip install -r server/requirements.txt`. Общий экземпляр менеджера:
-
-```python
-from server.cores.xray.xray_process_manager import xray
-from server.cores.xray.xray_grpc_client import XrayGrpcClient
-
-
-async def application():
-    client = XrayGrpcClient()
-    await xray.start()
-    print(f"gRPC: 127.0.0.1:{xray.api_port}")
-    try:
-        await client.connect(xray.api_port)
-        print(xray.status())
-        print(await client.list_outbounds())
-        # Здесь работает сервер.
-    finally:
-        await client.close()
-        await xray.stop()
-```
-
-`xray` — объект на уровне модуля. Все его импорты получают один экземпляр;
-сам класс `XrayProcessManager` допускает создание независимых объектов, например в тестах.
-
-## Интерфейс
+`MihomoProcessManager` реализует `CoreProcessManagerInterface`:
 
 | Метод | Поведение |
 | --- | --- |
-| `await start()` | Сгенерировать конфиг и запустить Xray с локальным gRPC API |
+| `await start()` | Сгенерировать стартовый конфиг и запустить Mihomo с локальным REST API |
 | `await stop()` | Запросить завершение и дождаться выхода |
 | `status()` | Состояние, PID, код выхода и ошибка |
 | `api_port` | Выбранный свободный порт API; `None` до запуска и после остановки |
+| `api_secret` | Случайный секрет API на этот запуск |
 | `binary_path` | Абсолютный путь к бинарнику текущей платформы |
 
-Для перезапуска последовательно вызовите `stop()` и `start()`. `stop()` можно вызывать повторно. `start()` при активном мониторинге
-вызывает `XrayError`. Вызывающая сторона должна выполнять операции последовательно
+Для перезапуска последовательно вызовите `stop()` и `start()`. `stop()` можно
+вызывать повторно. `start()` в любом состоянии, кроме `STOPPED`, вызывает
+`MihomoError`. Вызывающая сторона должна выполнять операции последовательно
 в одном event loop: защиты от одновременных вызовов нет.
 
 Состояния: `STOPPED`, `STARTING`, `RUNNING`, `STOPPING`, `FAILED`.
-`RUNNING` означает, что процесс создан. Менеджер не создаёт gRPC-клиент и не
-ожидает готовности API. Приложение отдельно вызывает `client.connect(xray.api_port)`. SOCKS5 ещё не настроен.
-Конфигурацию проверяет сам Xray при запуске. При неожиданном выходе менеджер
-сохраняет код и сообщение об ошибке. stdout и stderr объединены, постоянно читаются
-одной задачей наблюдения и передаются в стандартный logger `server.cores.xray.xray_process_manager`.
-История логов внутри менеджера не хранится.
+`RUNNING` означает, что процесс создан. Менеджер не ждёт готовности API:
+`MihomoClient` подключает REST-клиент сам. stdout и stderr объединены, постоянно
+читаются одной задачей наблюдения и передаются в logger
+`server.cores.mihomo.mihomo_process_manager`. При неожиданном выходе состояние
+становится `FAILED`, менеджер сохраняет код и сообщение об ошибке.
 
-При неожиданном завершении состояние становится `FAILED`. Повторный запуск
-выполняется приложением через `start()`.
+## Стартовый конфиг
 
-## Минимальный конфиг
+Приватный метод `MihomoProcessManager._generate_config()` формирует конфиг запуска:
 
-Приватный метод `XrayProcessManager._generate_config()` формирует стартовую конфигурацию:
+- `external-controller` на `127.0.0.1:<api_port>` с `secret`;
+- `mode: rule`, `allow-lan: false`, `bind-address: 127.0.0.1`, DNS выключен;
+- `profile.store-selected: false` — выбор в группах не сохраняется между запусками;
+- группы `main` и `test` типа `select` с единственным `REJECT`, без listener;
+  трафик без правила уходит в `REJECT`.
 
-- `log`: уровень `info`, журнал подключений отключён (`access: "none"`).
-- `api`: локальный адрес `127.0.0.1:<api_port>`, `HandlerService` и `RoutingService`.
-- `routing`: `domainStrategy: "AsIs"`, пустой список правил.
-- `outbounds`: один `blocked` (`blackhole`) для трафика без назначенного маршрута.
+Перед запуском менеджер получает свободный порт от ОС на `127.0.0.1:0` и
+генерирует секрет. JSON хранится во временной папке ОС и удаляется при `stop()`
+или ошибке создания процесса. Listener, серверы и правила `MihomoClient` задаёт
+целиком через REST, поэтому после нового запуска приложение восстанавливает
+inbound и серверы заново.
 
-SOCKS5 inbound, VLESS/direct outbounds и правила приложение добавляет через gRPC.
-DNS, FakeDNS, статистика и балансировщики не настроены. Управление доступно через `client`.
+## REST-клиент
 
-Перед запуском менеджер открывает временный TCP-сокет на `127.0.0.1:0`, получает
-свободный порт от ОС и закрывает сокет. Номер сохраняется в публичном поле
-`api_port` и записывается в конфиг. Между закрытием проверочного сокета и запуском
-Xray порт может занять другой процесс; резервирование порта не выполняется.
-Вывод Xray используется только для логирования, его формат не разбирается.
-
-JSON хранится во временной папке ОС и удаляется при `stop()` или ошибке создания
-процесса. При остановке или обнаружении завершения Xray `api_port` становится `None`.
-Каждый явный `start()` выбирает порт заново. Изменения через gRPC не записываются
-в файл: после нового запуска приложение должно восстановить обработчики и правила.
+`MihomoRestClient` — тонкая асинхронная обёртка над стандартным `http.client`:
+`connect(port, secret)` ждёт готовности API до 5 секунд, `replace_config(config)`
+(`PUT /configs`), `select_proxy(group, name)`, `get_proxies()`, `get_rules()`.
+Запросы идут на `127.0.0.1` с `Authorization: Bearer <secret>`, без прокси окружения,
+с таймаутом 5 секунд. Ошибки — `MihomoError` без текста ответа API: в нём могут быть
+пароли серверов. Вызовы до `connect` или после `close` вызывают `RuntimeError`.
 
 ## Остановка
 
@@ -801,8 +773,8 @@ JSON хранится во временной папке ОС и удаляет�
 может удерживать `stop()` в ожидании. Очистки при отмене асинхронных операций нет.
 Приложение вызывает `stop()` при штатном завершении, например в `finally` своего lifespan.
 
-Ядра (Xray и Mihomo) запускаются через `utils.start_child_process`, поэтому при смерти
-Python без `stop()` их останавливает ОС. На Linux ядро получает SIGTERM
+Mihomo запускается через `utils.start_child_process`, поэтому при смерти
+Python без `stop()` его останавливает ОС. На Linux ядро получает SIGTERM
 (`PR_SET_PDEATHSIG`). Сигнал привязан к потоку, запустившему процесс, поэтому ядро
 запускается из потока event loop. На Windows ядро входит в job object с
 `KILL_ON_JOB_CLOSE`, и Windows завершает его вместе с сервером. Если job object
@@ -817,16 +789,14 @@ Python без `stop()` их останавливает ОС. На Linux ядро
 `server.utils.detect_platform()` возвращает пару enum
 `tuple[OperatingSystem, Architecture]`: `LINUX`/`WINDOWS` и `X64`/`ARM64`.
 Строковые значения `.value` (`linux`/`win32`, `x64`/`arm64`) соответствуют папкам ресурсов.
-32-битные Python и неподдерживаемые платформы отклоняются явно. Ресурсы находятся
-относительно репозитория в `resources/xray/<os>/<arch>/xray[.exe]`, независимо
-от текущего рабочего каталога. `XRAY_LOCATION_ASSET` указывает на папку бинарника.
-Если конфиг использует GeoIP/GeoSite, соответствующие базы нужны в этой папке.
+32-битные Python и неподдерживаемые платформы отклоняются явно. Бинарник находится
+относительно репозитория в `resources/mihomo/<os>/<arch>/mihomo[.exe]`, независимо
+от текущего рабочего каталога.
 
 В Docker и десктопной поставке сохраняйте взаимное расположение `server` и
-`resources`; копируйте комплект целевой архитектуры. Linux-бинарнику нужны права
+`resources`; копируйте бинарник целевой архитектуры. Linux-бинарнику нужны права
 исполнения. На Windows используйте стандартный ProactorEventLoop, поддерживающий
-асинхронные subprocess. Xray запускается напрямую, без launcher и Job Object;
-клиент использует `grpcio` и `protobuf`.
+асинхронные subprocess.
 
 ## Проверки
 
@@ -834,67 +804,14 @@ Python без `stop()` их останавливает ОС. На Linux ядро
 python3 -m unittest discover -s server/tests -v
 ```
 
-Тесты используют настоящий бинарник текущей платформы: запуск и остановку,
-проверку сгенерированного конфига, вызовы Python gRPC-клиента, SOCKS5 handshake,
-добавление/удаление обработчиков и переключение маршрутов,
-очистку временного файла, отсутствие бинарника и сохранение `FAILED` после падения.
-
-## gRPC-клиент
-
-`server/cores/xray/xray_grpc_client.py` содержит `XrayGrpcClient`. Методы:
-
-- `add_inbound(config)`, `remove_inbound(tag)`, `list_inbounds()`;
-- `add_outbound(config)`, `remove_outbound(tag)`, `list_outbounds()`;
-- `replace_rules(rules)`, `append_rules(rules)`, `remove_rule(tag)`, `list_rules()`;
-- `test_route(context)` — проверить, какой outbound выберут правила.
-
-Все методы асинхронные. Добавление принимает protobuf-объекты из
-`server.cores.xray.grpc_generated`, а не JSON-конфиги. `typed_message(message)` упаковывает
-настройки в используемый Xray тип `TypedMessage`.
-
-```python
-from server.cores.xray.xray_grpc_client import typed_message
-from server.cores.xray.grpc_generated.core.config_pb2 import OutboundHandlerConfig
-from server.cores.xray.grpc_generated.proxy.freedom.config_pb2 import Config as FreedomConfig
-from server.cores.xray.grpc_generated.app.router.config_pb2 import RoutingRule
-
-# После await xray.start() и await client.connect(xray.api_port):
-await client.add_outbound(
-    OutboundHandlerConfig(
-        tag="direct",
-        proxy_settings=typed_message(FreedomConfig()),
-    )
-)
-await client.replace_rules(
-    [
-        RoutingRule(rule_tag="selected", inbound_tag=["socks"], tag="direct"),
-    ]
-)
-```
-
-SOCKS inbound здесь предполагается уже добавленным. Готовые сборщики параметров
-SOCKS/VLESS пока не реализованы; доступные protobuf-схемы позволяют собрать их вручную.
-`replace_rules` заменяет все правила и очищает балансировщики; `domainStrategy`
-остаётся из стартового конфига. `list_rules` возвращает только теги правил и outbound,
-не полные условия. Переключение применяется к новым соединениям.
-
-Каждый RPC обёртки имеет фиксированный таймаут 5 секунд.
-Ошибки Xray передаются как `grpc.aio.AioRpcError`, автоматического повтора команд нет.
-Для остальных вызовов доступны `client.handlers` и `client.routing` — сгенерированные
-клиенты сервисов; при прямом вызове передавайте `timeout` самостоятельно.
-Соединение локальное, без TLS, использование HTTP-прокси окружения отключено.
-
-Менеджер процесса и gRPC-клиент не импортируют друг друга и не управляют друг другом.
-Приложение закрывает клиент само и после нового запуска передаёт ему новый порт.
-Клиент создаётся отдельно:
-`client = XrayGrpcClient()`, `await client.connect(port)`, `await client.close()`.
-Вызовы до подключения или после закрытия возвращают `RuntimeError`.
+Тесты ядра используют настоящий бинарник Mihomo текущей платформы: запуск и
+остановку, REST API, SOCKS5 handshake, inbound, переключение маршрутов и падение процесса.
 
 ## Модель сервера подписки
 
 `server/models/outbound_server.py`: `OutboundServer` и enum `OutboundProtocol`,
 `OutboundTransport`, `OutboundSecurity`. Это данные одного удалённого сервера,
-без загрузки подписки и преобразования в protobuf. Разбор выполняется в
+без загрузки подписки и преобразования в конфиг ядра. Разбор выполняется в
 `server/subscription_loader.py` (приватная функция `_parse_subscription`, вызываемая загрузчиком).
 
 Проверенные ответы на 17.09.2026 с User-Agent `v2rayN/7.0`:
@@ -941,7 +858,7 @@ x-durev-prio, без предположений об их назначении.
 
 `subscription_id` — внутренний идентификатор подписки приложения.
 `source_tag` — исходный тег провайдера; он может повторяться между профилями.
-Уникальный тег для Xray приложение назначит отдельно. UUID, пароли и сырые
+В ядре сервер называется своим `id`. UUID, пароли и сырые
 настройки провайдера помечены `SECRET`: они исключены из repr и не отправляются
 клиентам, но остаются доступными полями. Модель не валидирует параметры подключения. Парсер проверяет адрес, порт,
 UUID и значения enum при импорте.
@@ -1165,8 +1082,8 @@ your-durev.com отдаёт gzip даже при `Accept-Encoding: identity`.
 Из JSON извлекаются VLESS, Shadowsocks и Hysteria 2, включая несколько outbound
 и пользователей в профиле. Локальные freedom/blackhole/dns/loopback пропускаются.
 Неизвестные протоколы и некорректные записи вызывают ошибку всей подписки.
-Исходные настройки streamSettings сохраняются в stream_options; преобразование
-моделей обратно в Xray ещё не реализовано.
+Исходные настройки streamSettings сохраняются в stream_options; конфиг Mihomo
+строится из полей модели и stream_options (раздел «Клиент приложения»).
 
 `SettingsStore().outbound_server` — серверы в той же SQLite-БД.
 В таблице `outbound_servers` колонки совпадают с полями `OutboundServer`:
@@ -1244,7 +1161,7 @@ servers.update_servers(loaded)
 registered_servers = servers.get_all()
 ```
 
-Хранилища не обращаются к Xray или gRPC и не вызывают друг друга.
+Хранилища не обращаются к ядру и не вызывают друг друга.
 Приложение выполняет операции изменения последовательно.
 
 ## Проверка серверов
@@ -1336,22 +1253,22 @@ TLS поверх SOCKS-туннеля поднимает сам `outbound_probe`
 В `server/cores/core_process_manager.py` расположен абстрактный класс
 `CoreProcessManagerInterface`: `api_port`, `binary_path`, `status()`, `start()` и `stop()`.
 
-Менеджер `XrayProcessManager` наследуется от этого интерфейса.
-Реализация менеджера и самостоятельный `XrayGrpcClient` находятся в `server/cores/xray/`.
-Там же расположена папка `grpc_generated`; генератор в `scripts/generate_grpc.py`
-записывает результат в неё. Менеджер процесса и клиент независимы.
+Менеджер `MihomoProcessManager` наследуется от этого интерфейса. Он и
+самостоятельный `MihomoRestClient` находятся в `server/cores/mihomo/`;
+менеджер процесса и REST-клиент не управляют друг другом.
 
 ## Клиент приложения
 
 `server/cores/core_client.py` содержит абстрактный `CoreClient`.
-`server/cores/xray/xray_client.py` реализует его классом `XrayClient`, который
-использует отдельные `XrayProcessManager` и `XrayGrpcClient`.
+`server/cores/mihomo/mihomo_client.py` реализует его классом `MihomoClient`, который
+использует отдельные `MihomoProcessManager` и `MihomoRestClient`. Другое ядро
+подключается новой реализацией `CoreClient`; хендлеры от него не зависят.
 
 ```python
-from server.cores.xray.xray_client import XrayClient
+from server.cores.mihomo.mihomo_client import MihomoClient
 from server.models import InboundServer, InboundType
 
-client = XrayClient()
+client = MihomoClient()
 await client.service_start(test_port=1081)
 try:
     await client.inbound_set(InboundServer(type=InboundType.PROXY, proxy_port=1080))
@@ -1392,13 +1309,10 @@ finally:
   неизменным конфигом Mihomo не перезапускает, соединения через него не рвутся.
   Listener, который Mihomo не смог открыть, он только пишет в лог, поэтому после
   неудачной проверки клиент возвращает прежний конфиг.
-- Xray: inbound — SOCKS-inbound с тегом `inbound-<id>` (он принимает и HTTP),
-  все такие теги — в правиле основного маршрута. При замене прежний inbound
-  удаляется до добавления нового, при ошибке возвращается.
 - Без выбранного outbound трафик соответствующего маршрута блокируется.
 - `outbound_register` полностью заменяет список, сбрасывая оба маршрута в блокировку.
   `outbound_connect(id)` и `test_connect(id)` выбирают уже зарегистрированный сервер.
-  Переключение не удаляет остальные регистрации. Xray проверяет наличие ID через gRPC.
+  Переключение не удаляет остальные регистрации.
 - `test_stop` блокирует тестовый маршрут, сохраняя listener и серверы. Повторный
   `test_connect(id)` возобновляет маршрутизацию новых соединений. Уже открытые
   соединения не переносятся на другой сервер и не закрываются принудительно.
@@ -1406,28 +1320,17 @@ finally:
   снова его открывает.
 - Тестовый порт фиксируется при `service_start(test_port)`; порты inbound меняет
   `inbound_set`.
-- Клиент управляет всей таблицей правил. Не изменяйте её параллельно через
-  низкоуровневый gRPC-клиент. `service_start` требует остановленного сервиса;
-  `service_stop` закрывает gRPC и останавливает процесс.
-- `outbound_config.py` объединяет поля модели и `stream_options` в словарь
-  в памяти. Явные поля модели имеют приоритет. Неизвестные параметры URI
-  в `extra_params` сохраняются в модели, но не интерпретируются клиентом.
-- `outbound_protobuf.py` собирает `OutboundHandlerConfig`, `SenderConfig`,
-  настройки протокола и транспорта непосредственно через Python protobuf.
-  Сборка синхронная: нет файлов, запуска `xray convert pb` и перезапуска ядра.
-  Готовый объект передаётся через `XrayGrpcClient.add_outbound()`.
-- Поддерживаются VLESS, Shadowsocks (включая 2022), Hysteria 2;
-  TCP, WS, gRPC, XHTTP, Hysteria; TLS и Reality. В XHTTP преобразуются
-  диапазоны и `extra.xmux`, в Reality — ключи, short ID и `spiderX`,
-  в Hysteria — `finalmask.quicParams`. Shadowsocks UoT поддерживается
-  только для 2022, как в используемой версии ядра.
-- Это преобразователь клиентских настроек, а не полная реализация всех
-  расширений JSON Xray. Неподдерживаемые поля (например TCP/UDP-маски,
-  сертификаты TLS из файлов) вызывают `ValueError` до изменения маршрута.
-  Неизвестные поля не отбрасываются незаметно. Новые расширения требуют
-  явного добавления преобразования и тестов.
+- Клиент управляет всем конфигом ядра. Не изменяйте его параллельно через
+  REST-клиент. `service_start` требует остановленного сервиса;
+  `service_stop` закрывает REST-клиент и останавливает процесс.
+- `outbound_config.py` переводит модель в proxy Mihomo без изменения модели:
+  явные поля модели и известные расширения из `stream_options` и `*_extra`.
+  Поддерживаются VLESS, Shadowsocks, Hysteria 2; TCP, WS, gRPC, XHTTP; TLS и
+  Reality. Неподдерживаемые расширения (например маски транспорта, flow
+  `xtls-rprx-vision-udp443`, режимы gRPC `multi`/`guna`) вызывают `ValueError`
+  до изменения конфига. Неизвестные поля не отбрасываются незаметно. Неизвестные
+  параметры URI в `extra_params` сохраняются в модели, но не интерпретируются.
 
-Локальные тесты проверяют SOCKS-handshake, независимость маршрутов,
-смену портов, удаление прежних outbound и конвертацию VLESS/Shadowsocks/Hysteria 2,
-а также TCP/WS/gRPC/XHTTP. Доступность реальных серверов подписок эти тесты
-не проверяют.
+Локальные тесты проверяют SOCKS-handshake, независимость маршрутов, inbound,
+смену серверов и преобразование VLESS/Shadowsocks/Hysteria 2, а также
+TCP/WS/gRPC/XHTTP. Доступность реальных серверов подписок эти тесты не проверяют.

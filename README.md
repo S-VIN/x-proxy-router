@@ -1,6 +1,6 @@
 # x-proxy-router
 
-Проект приложения для запуска и настройки Xray: серверная часть, затем веб-интерфейс
+Проект приложения для запуска и настройки ядра Mihomo: серверная часть, затем веб-интерфейс
 и десктопное приложение на Electron для Windows и Linux.
 
 ## Инструменты разработки
@@ -24,72 +24,52 @@ uv run ruff format .
 ```
 
 Настройки находятся в `pyproject.toml`, точные версии — в `uv.lock`.
-Ruff проверяет стиль и ошибки кода, ty — типы. Сгенерированные файлы
-`server/cores/xray/grpc_generated` исключены из проверок и форматирования.
+Ruff проверяет стиль и ошибки кода, ty — типы.
 В существующем коде пока есть замечания обоих инструментов;
 установка инструментов не применяет исправления автоматически.
 Самодостаточные скрипты из `scripts` по-прежнему можно запускать обычным `python`.
 
-## Бинарники Xray
+## Бинарники Mihomo
 
-Официальные сборки Xray-core **v26.3.27** находятся в [`resources/xray`](resources/xray).
-Версия, ссылки на архивы и их SHA-256 закреплены в
-[`manifest.json`](resources/xray/manifest.json).
+Официальные сборки [Mihomo](https://github.com/MetaCubeX/mihomo) **v1.19.31**
+находятся в [`resources/mihomo`](resources/mihomo), лицензия — в
+[`resources/mihomo/LICENSE`](resources/mihomo/LICENSE).
 
 | ОС | Архитектура | Исполняемый файл |
 | --- | --- | --- |
-| Linux | x86-64 / amd64 | `resources/xray/linux/x64/xray` |
-| Linux | ARM64 / aarch64 | `resources/xray/linux/arm64/xray` |
-| Linux | ARMv7 (32 бита) | `resources/xray/linux/armv7/xray` |
-| Windows | x86-64 / amd64 | `resources/xray/win32/x64/xray.exe` |
-| Windows | ARM64 | `resources/xray/win32/arm64/xray.exe` |
+| Linux | x86-64 / amd64 | `resources/mihomo/linux/x64/mihomo` |
+| Linux | ARM64 / aarch64 | `resources/mihomo/linux/arm64/mihomo` |
+| Windows | x86-64 / amd64 | `resources/mihomo/win32/x64/mihomo.exe` |
+| Windows | ARM64 | `resources/mihomo/win32/arm64/mihomo.exe` |
 
-Каждая папка содержит полный комплект из официального архива: исполняемый файл,
-`geoip.dat`, `geosite.dat`, лицензию и README upstream. `checksums.json` содержит
-SHA-256 распакованных файлов. Скрипт выставляет Linux-бинарникам права `0755`.
+Для x86-64 используются сборки `compatible`, они работают и на старых процессорах.
+Имена `linux`, `win32`, `x64`, `arm64` соответствуют значениям Node.js
+`process.platform` и `process.arch`. Остальные ОС и архитектуры пока не включены.
 
 ### Повторное скачивание
 
 Нужны Python 3.9+ и доступ к GitHub. Сторонние Python-пакеты не требуются.
 
 ```sh
-python3 scripts/download-xray.py
-python3 scripts/download-xray.py --target linux/x64
-python3 scripts/download-xray.py --target win32/x64 --target win32/arm64
+python3 scripts/download-mihomo.py
 ```
 
-На Windows используйте `py -3` вместо `python3`. Скрипт проверяет SHA-256 архива
-по manifest перед распаковкой; повторный запуск перезаписывает файлы выбранных
-комплектов. Для обновления версии нужно обновить URL и SHA-256 в manifest из
-официального релиза, затем запустить скрипт.
+На Windows используйте `py -3` вместо `python3`. Версия и SHA-256 архивов
+закреплены в скрипте; он проверяет архив перед распаковкой, перезаписывает
+бинарники и выставляет Linux-бинарникам права `0755`. Для обновления версии
+нужно обновить версию и SHA-256 в скрипте из официального релиза.
 
 ### Использование сервером и Electron
 
-Имена `linux`, `win32`, `x64`, `arm64` соответствуют значениям Node.js
-`process.platform` и `process.arch`. Для ARMv7 значение Node.js — `arm`:
-сервер должен дополнительно проверить версию ARM и выбрать `armv7`.
-Остальные ОС и архитектуры пока не включены.
+Сервер сам выбирает бинарник текущей платформы, запускает его с временным
+конфигом и управляет им через локальный REST API.
 
-Запускайте Xray по абсолютному пути и передавайте конфигурацию явно:
-
-```sh
-./resources/xray/linux/x64/xray version
-./resources/xray/linux/x64/xray run -test -config /absolute/path/config.json
-./resources/xray/linux/x64/xray run -config /absolute/path/config.json
-```
-
-Задавайте `XRAY_LOCATION_ASSET` равным абсолютному пути к папке выбранного
-комплекта для загрузки `geoip.dat` и `geosite.dat`. Генерируемую конфигурацию
-и пользовательские данные храните отдельно от бинарников.
-
-В Electron упаковывайте нужный комплект через `extraResources`, вне `app.asar`;
+В Electron упаковывайте нужный бинарник через `extraResources`, вне `app.asar`;
 в установленном приложении стройте путь относительно `process.resourcesPath`.
 Архитектуру выбирайте для целевой сборки приложения.
 
-В Docker копируйте только комплект для целевой архитектуры образа:
-`amd64` → `linux/x64`, `arm64` → `linux/arm64`, `arm/v7` → `linux/armv7`. После копирования задайте `chmod 755` для `xray` и
-`XRAY_LOCATION_ASSET` для каталога комплекта. Полный набор всех платформ
-не нужен внутри одного образа.
+В Docker копируйте только бинарник для целевой архитектуры образа:
+`amd64` → `linux/x64`, `arm64` → `linux/arm64`, и задайте ему `chmod 755`.
 
 ## Серверная часть
 

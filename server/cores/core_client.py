@@ -21,8 +21,6 @@ _RESERVED_IDS = frozenset(
         "PASS",
         "GLOBAL",
         "COMPATIBLE",
-        "blocked",
-        "api",
     }
 )
 _ADDRESS_IN_USE = {errno.EADDRINUSE, getattr(errno, "WSAEADDRINUSE", errno.EADDRINUSE)}
@@ -173,7 +171,7 @@ class CoreClient(ABC):
     async def outbound_register(self, servers: list[OutboundServer]) -> None:
         """Replace ALL registered servers and reset both routes to blocked; keep inbounds.
 
-        Empty list deletes all. IDs must be unique. Xray replacement is not atomic.
+        Empty list deletes all. IDs must be unique.
         """
         ...
 

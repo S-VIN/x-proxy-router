@@ -6,8 +6,6 @@ dependencies = [
     "aiohttp>=3.14,<4",
     "aiohttp-socks>=0.12,<1",
     "apscheduler>=3.11.3,<4",
-    "grpcio==1.78.0",
-    "protobuf==6.33.5",
 ]
 
 [tool.uv]
@@ -16,14 +14,12 @@ package = false
 [tool.ruff]
 target-version = "py311"
 line-length = 100
-extend-exclude = ["server/cores/xray/grpc_generated"]
 
 [tool.ty.environment]
 python-version = "3.11"
 
 [tool.ty.src]
 include = ["server", "scripts"]
-exclude = ["server/cores/xray/grpc_generated"]
 
 [dependency-groups]
 dev = [
