@@ -13,12 +13,13 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from server.cores.core_client import CoreClient
+from server.cores.core_client import CoreClient, InboundError
 from server.handlers.auto_connect import RETRY_INTERVAL, watch_connected_server
 from server.handlers.outbound_test import test_outbound_servers
 from server.handlers.subscriptions import refresh_subscriptions
-from server.main import PROXY_PORT, TEST_PORT, WebSocketServer, application, configure_handlers
+from server.main import TEST_PORT, WebSocketServer, application, configure_handlers
 from server.models.application_context import ApplicationContext
+from server.models.inbound_server import DEFAULT_PROXY_PORT, InboundServer, InboundType
 from server.models.outbound_server import OutboundProtocol, OutboundServer
 from server.models.server_settings import ServerSettings
 from server.models.subscription_link import SubscriptionLink
@@ -126,7 +127,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(Path("settings.sqlite3").is_file())
                 self.assertIs(context.settings, SettingsStore())
                 self.assertIs(context.core_client, self.core)
-                self.core.service_start.assert_awaited_once_with(PROXY_PORT, TEST_PORT)
+                self.core.service_start.assert_awaited_once_with(TEST_PORT)
                 self.core.outbound_register.assert_awaited_once_with([])
                 raise RuntimeError("handler failure")
         self.core.service_stop.assert_awaited_once()
@@ -154,19 +155,63 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.core.check_outbound_server_config.side_effect = check
         order = []
         self.core.service_start.side_effect = lambda *args: order.append("start")
+        self.core.inbound_set.side_effect = lambda inbound: order.append("inbound")
         self.core.outbound_register.side_effect = lambda servers: order.append("register")
         self.load.side_effect = lambda link: order.append("refresh") or []
         with self.assertLogs("server.handlers.core", level="WARNING") as logs:
             async with application():
-                # Stored servers are registered before init refreshes subscriptions.
-                self.assertEqual(order, ["start", "register"])
+                # Inbounds listen and stored servers are registered before init
+                # refreshes subscriptions.
+                self.assertEqual(order, ["start", "inbound", "register"])
                 self.core.outbound_register.assert_awaited_once_with([supported])
                 for _ in range(5):
                     await asyncio.sleep(0)  # Let init finish.
                 # The refresh registers the servers it stored again.
-                self.assertEqual(order, ["start", "register", "refresh", "register"])
+                self.assertEqual(order, ["start", "inbound", "register", "refresh", "register"])
         self.assertIn(unsupported.id, logs.output[0])
         self.assertNotIn("secret", logs.output[0])
+
+    async def test_startup_starts_stored_inbounds(self):
+        with SettingsStore() as settings:
+            (default,) = settings.inbound_server.get_all()
+            busy = InboundServer(type=InboundType.PROXY, proxy_port=1081, error="stale")
+            disabled = InboundServer(
+                type=InboundType.PROXY, proxy_port=1082, enabled=False, error="stale"
+            )
+            broken = InboundServer(type=InboundType.PROXY, proxy_port=1083)
+            for inbound in (busy, disabled, broken):
+                settings.inbound_server.save(inbound)
+        self.assertEqual(
+            (default.type, default.proxy_listen, default.proxy_port, default.enabled),
+            (InboundType.PROXY, "127.0.0.1", DEFAULT_PROXY_PORT, True),
+        )
+
+        async def start(inbound):
+            if inbound.id == busy.id:
+                raise InboundError("Port 1081 is already in use", "proxy_port")
+            if inbound.id == broken.id:
+                raise RuntimeError("secret core diagnostics")
+
+        self.core.inbound_set.side_effect = start
+        with self.assertLogs("server.handlers.inbound_server", level="WARNING") as logs:
+            async with application() as context:
+                # One inbound that cannot listen does not keep the others out.
+                self.assertEqual(
+                    [call.args[0].id for call in self.core.inbound_set.await_args_list],
+                    [default.id, busy.id, broken.id],
+                )
+                errors = {item.id: item.error for item in context.settings.inbound_server.get_all()}
+                self.assertEqual(
+                    errors,
+                    {
+                        default.id: None,
+                        busy.id: "Port 1081 is already in use",
+                        disabled.id: None,
+                        broken.id: "The core could not start the inbound",
+                    },
+                )
+        self.assertNotIn("secret", str(errors[broken.id]))
+        self.assertEqual(len(logs.records), 2)
 
     async def test_core_start_failure_stops_startup(self):
         self.core.service_start.side_effect = RuntimeError("port is busy")

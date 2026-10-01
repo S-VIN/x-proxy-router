@@ -30,6 +30,12 @@ from .handlers.auto_connect import (
     watch_connected_server,
 )
 from .handlers.core import register_outbound_servers
+from .handlers.inbound_server import (
+    add_inbound_server,
+    change_inbound_server,
+    delete_inbound_server,
+    start_inbound_servers,
+)
 from .handlers.init import init
 from .handlers.outbound_test import test_outbound_servers
 from .handlers.reg_filter import add_reg_filter, delete_reg_filter
@@ -55,9 +61,8 @@ from .tasks import TaskCancelled, TaskRegistry
 
 log = logging.getLogger(__name__)
 
-# SOCKS5 listeners of the core on 127.0.0.1: the main route for traffic and
-# the test route for server checks.
-PROXY_PORT = 20808
+# SOCKS5 listener of the core on 127.0.0.1 for server checks. Listeners for
+# traffic are inbounds stored in the database (handlers/inbound_server.py).
 TEST_PORT = 20809
 
 # Clients connect to ws://WEBSOCKET_HOST:WEBSOCKET_PORT/ws (server/PROTOCOL.md).
@@ -450,8 +455,9 @@ class WebSocketServer:
 async def application() -> AsyncIterator[ApplicationContext]:
     """Create shared services; stop jobs and the core before closing SQLite.
 
-    The core is started and the stored servers are registered in it before the
-    application is ready; if the core cannot start, the application does not start.
+    The core is started, the stored inbounds listen and the stored servers are
+    registered before the application is ready. If the core cannot start, the
+    application does not start; an inbound that cannot listen keeps its error.
     With auto_connect on, the best stored server is connected then if nothing is
     (handlers/auto_connect.py).
     """
@@ -464,6 +470,7 @@ async def application() -> AsyncIterator[ApplicationContext]:
         sync.register(ModelChannel("subscription_link", settings.subscription_link.get_all))
         sync.register(ModelChannel("reg_filter", settings.reg_filter.get_all))
         sync.register(ModelChannel("outbound_server", settings.outbound_server.get_all))
+        sync.register(ModelChannel("inbound_server", settings.inbound_server.get_all))
         tasks = TaskRegistry(on_change=partial(sync.notify, "task"))
         sync.register(ModelChannel("task", tasks.states))
         context = ApplicationContext(
@@ -472,7 +479,8 @@ async def application() -> AsyncIterator[ApplicationContext]:
         init_task = None
         try:
             scheduler.start()
-            await core_client.service_start(PROXY_PORT, TEST_PORT)
+            await core_client.service_start(TEST_PORT)
+            await start_inbound_servers(context)
             await register_outbound_servers(context)
             await on_servers_changed(context)
             await websocket.start(WEBSOCKET_HOST, WEBSOCKET_PORT, static_dir=WEB_CLIENT_DIR)
@@ -519,6 +527,9 @@ def configure_handlers(context: ApplicationContext) -> None:
     websocket.register("delete", "subscription_link", partial(delete_subscription_link, context))
     websocket.register("add", "reg_filter", partial(add_reg_filter, context))
     websocket.register("delete", "reg_filter", partial(delete_reg_filter, context))
+    websocket.register("add", "inbound_server", partial(add_inbound_server, context))
+    websocket.register("change", "inbound_server", partial(change_inbound_server, context))
+    websocket.register("delete", "inbound_server", partial(delete_inbound_server, context))
     websocket.register("change", "server_settings", partial(change_server_settings, context))
     websocket.register(
         "request", "refresh_subscriptions", partial(request_refresh_subscriptions, context)

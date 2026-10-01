@@ -692,7 +692,8 @@ class MihomoCheckTests(ListenerTestCase):
         self.enterContext(chdir(directory))
         self.core = MihomoClient()
         self.enterContext(patch("server.main.MihomoClient", return_value=self.core))
-        self.enterContext(patch("server.main.PROXY_PORT", free_port()))
+        # The inbound created with the database listens on this port.
+        self.enterContext(patch("server.settings_store.DEFAULT_PROXY_PORT", free_port()))
         self.enterContext(patch("server.main.TEST_PORT", free_port()))
         self.enterContext(
             patch(
@@ -809,9 +810,10 @@ class MihomoCheckTests(ListenerTestCase):
         # The main route is connected again; the test route stays blocked.
         self.assertEqual(proxies["main"]["now"], server.id)
         self.assertEqual(proxies["test"]["now"], "REJECT")
-        # Traffic of the main listener goes through the connected server.
+        # Traffic of the default inbound goes through the connected server.
         base = f"http://127.0.0.1:{self.http_port}"
-        connector = ProxyConnector.from_url(f"socks5://127.0.0.1:{self.core.proxy_port}")
+        (inbound,) = self.context.settings.inbound_server.get_all()
+        connector = ProxyConnector.from_url(f"socks5://127.0.0.1:{inbound.proxy_port}")
         async with (
             ClientSession(connector=connector) as session,
             session.get(f"{base}/status/204") as response,

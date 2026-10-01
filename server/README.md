@@ -17,15 +17,19 @@ uv run python -m server.main
 При запуске открывается `SettingsStore()` (БД `settings.sqlite3` в рабочей папке),
 создаётся один `MihomoClient`, запускается планировщик. Затем, до того как
 приложение готово к работе, запускается ядро:
-`service_start(PROXY_PORT, TEST_PORT)` — SOCKS5 на `127.0.0.1:20808` (основной маршрут)
-и `127.0.0.1:20809` (тестовый); порты — константы в `main.py`. Сразу после этого
+`service_start(TEST_PORT)` — только тестовый SOCKS5 на `127.0.0.1:20809`
+(константа в `main.py`). Затем `handlers/inbound_server.py`,
+`start_inbound_servers(context)` запускает включённые inbound из БД (раздел «Inbound»):
+при первом запуске это созданный вместе с таблицей прокси на `127.0.0.1:20808`.
+Inbound, который не запустился (например, порт занят), получает `error`, остальные
+запускаются, приложение работает дальше. Сразу после этого
 `handlers/core.py`, `register_outbound_servers(context)` регистрирует в ядре серверы из БД.
 Серверы, из параметров которых ядро не может собрать конфиг
 (`check_outbound_server_config` вызывает `ValueError`), пропускаются: в лог пишется
 предупреждение только с id сервера, остальные регистрируются. После регистрации
 тестовый маршрут заблокирован, а основной снова подключается к серверу с
 `is_connected`; в режиме `auto_connect`, если ничего не подключено, затем
-подключается лучший сервер (см. «Автоподключение»). Если ядро не запустилось (например, порт занят),
+подключается лучший сервер (см. «Автоподключение»). Если ядро не запустилось (например, занят тестовый порт),
 приложение не запускается, а исключение выходит из `application()`.
 
 Регистрация идёт по сохранённым серверам и не ждёт обновления подписок.
@@ -80,6 +84,8 @@ uv run python -m server.main
 | `tasks.py` | Долгие задачи: декоратор `long_task`, реестр `TaskRegistry` (`context.tasks`) |
 | `outbound_probe.py` | Сетевые проверки сервера: TCP-пинг, скорость и HTTP-тесты через тестовый inbound |
 | `handlers/auto_connect.py` | Алгоритм режима `auto_connect` и его состояние `AutoConnectState` (`context.auto_connect`) |
+| `handlers/inbound_server.py` | Запросы `add`/`change`/`delete` для `inbound_server` и запуск inbound при старте, `start_inbound_servers` |
+| `models/inbound_server.py` | Модель `InboundServer`, типы `InboundType`, порт inbound по умолчанию `DEFAULT_PROXY_PORT` |
 | `handlers/` | Обычные async-функции, которые можно вызывать независимо от расписания |
 
 Хендлер получает `ApplicationContext`: `settings`, `core_client`, `scheduler`,
@@ -224,7 +230,7 @@ context.scheduler.remove_job("my-job")
 ```
 
 - `model` — имя коллекции: `server_settings`, `subscription_link`, `reg_filter`,
-  `outbound_server`, `task` (в этом порядке приходят снимки при подключении). `server_settings` —
+  `outbound_server`, `inbound_server`, `task` (в этом порядке приходят снимки при подключении). `server_settings` —
   коллекция из одного объекта с `id: 0`. `task` — долгие задачи сервера
   (раздел «Долгие задачи»).
 - `payload` — объекты целиком, как их возвращает `serialize()`.
@@ -271,7 +277,7 @@ password: str | None = field(default=None, repr=False, metadata=SECRET)
 ```
 
 Клиентам не передаются: `SubscriptionLink.url`, `vless_uuid`, `vless_encryption`,
-`shadowsocks_password`, `hysteria_auth`, а также сырые данные провайдера, в которых
+`shadowsocks_password`, `hysteria_auth`, `InboundServer.proxy_password`, а также сырые данные провайдера, в которых
 могут быть учётные данные: `stream_options` (содержит `hysteriaSettings.auth`),
 `extra_params` и `*_extra`. Вместо URL подписки клиент получает `url_short`.
 
@@ -284,7 +290,8 @@ password: str | None = field(default=None, repr=False, metadata=SECRET)
 Есть два вида запросов:
 
 - **Изменение модели** — `type` равен `add`, `change` или `delete`, в `model`
-  имя изменяемой модели (`subscription_link`, `reg_filter`, `server_settings`).
+  имя изменяемой модели (`subscription_link`, `reg_filter`, `server_settings`,
+  `inbound_server`).
 - **Действие** — `type` всегда `request`, а само действие записано в `model`,
   например `refresh_subscriptions`. Новые действия, которые не сводятся
   к добавлению, изменению или удалению одной модели, добавляются только так,
@@ -440,7 +447,7 @@ context.websocket.register(
 можно вызвать через `await context.websocket.dispatch("delete", "subscription_link", {"id": ...})`
 (для неизвестной пары — `RequestError` с `unknown_request`) или напрямую.
 Для обращения к ядру обработчик использует `context.core_client`, например
-`await context.core_client.service_start(proxy_port=1080, test_port=1081)`.
+`await context.core_client.outbound_connect(server_id)`.
 
 ## Завершение
 
@@ -566,6 +573,44 @@ context.websocket.register(
 После перезапуска состояние пустое: оценки начинаются с сохранённых рейтингов,
 карантина и счётчиков нет. Каждое переключение пишется в лог с причиной.
 
+## Inbound
+
+Inbound — порт, на котором ядро принимает трафик пользователя. Модель
+`InboundServer` (`server/models/inbound_server.py`, неизменяемая) одна на все типы:
+поля с префиксом типа заполнены только у inbound этого типа, у остальных `None`.
+Конструктор подставляет умолчания своего типа, отвергает поля чужих и проверяет
+значения; ошибка — `InboundFieldError` (наследник `ValueError`) с полем `field`.
+
+- `id: str` — строковый UUID;
+- `type: InboundType` — пока только `PROXY` (`"proxy"`): SOCKS5 и HTTP на одном
+  порту, UDP через SOCKS5 всегда включён;
+- `enabled: bool = True` — `False` хранит inbound без listener в ядре;
+- `proxy_listen: str` — IP-адрес, по умолчанию `127.0.0.1`; хранится в сокращённой
+  форме (`ipaddress`), имя хоста не принимается;
+- `proxy_port: int` — обязателен, 1–65535;
+- `proxy_username`, `proxy_password: str | None` — оба заданы или оба `None`; логин
+  без `:`, оба непустые. Пароль помечен `SECRET`: его нет в repr и у клиентов;
+- `error: str | None` — почему ядро не слушает порт, ведёт сервер.
+
+Трафик всех inbound идёт основным маршрутом ядра: через сервер с `is_connected`,
+а пока ничего не подключено, блокируется. Тестовый порт проверок inbound не является
+и в модели не хранится.
+
+`handlers/inbound_server.py`:
+
+- `start_inbound_servers(context)` — при старте приложения, после `service_start`:
+  `core_client.inbound_set` для каждого включённого inbound. Причина неудачи
+  записывается в `error` (`InboundError` — её текст, другое исключение — общий
+  текст, подробности только в логе), у запущенных и выключенных `error` очищается.
+- `add_inbound_server`, `change_inbound_server`, `delete_inbound_server` — запросы
+  клиентов (PROTOCOL.md, `inbound_server`). Под `core_lock` сначала меняется ядро,
+  затем БД: включённый inbound запускается или заменяется `inbound_set`, выключенный
+  или удалённый останавливается `inbound_delete`. Если ядро не смогло, БД не меняется,
+  а ядро слушает прежний порт. Порт не может совпадать с портом другого inbound
+  (даже выключенного) и с тестовым портом ядра. `InboundError` с полем `proxy_port`
+  становится `conflict`, с `proxy_listen` — `validation_error`, остальные ошибки
+  ядра — `core_error`. Успешный `change` очищает `error`.
+
 ## Фильтрация серверов
 
 `OutboundServer.filtered: FilterReason | None` — почему сервер отфильтрован:
@@ -671,10 +716,11 @@ await context.tasks.cancel_all()  # при остановке приложени
 
 ## Управление Xray
 
-Общий `CoreClient` предоставляет командный интерфейс: запуск двух фиксированных
-SOCKS-портов, полная замена списка через `outbound_register(servers)`, выбор сервера
-по `id` и `outbound_delete_all()`. Имена outbounds равны `OutboundServer.id` без
-префикса. Замена списка сбрасывает оба маршрута в блокировку; у Xray она не атомарна.
+Общий `CoreClient` предоставляет командный интерфейс: запуск с тестовым
+SOCKS-портом, inbound (`inbound_set`, `inbound_delete`), полная замена списка через
+`outbound_register(servers)`, выбор сервера по `id` и `outbound_delete_all()`. Имена
+outbounds равны `OutboundServer.id` без префикса. Замена списка сбрасывает оба
+маршрута в блокировку; у Xray она не атомарна.
 
 Python **3.11+**. Установка зависимостей: `python -m pip install -r server/requirements.txt`. Общий экземпляр менеджера:
 
@@ -1068,6 +1114,15 @@ with SettingsStore() as settings:
     deleted = settings.subscription_link.delete(link.id)  # bool
 ```
 
+`settings.inbound_server` (`InboundServerStore`) хранит `InboundServer` в таблице
+`inbound_servers`, по колонке на поле, с `UNIQUE (proxy_port)`. Вместе с таблицей
+создаётся inbound по умолчанию: `PROXY` на `127.0.0.1:DEFAULT_PROXY_PORT` (20808).
+Удалённый, он не появляется снова, потому что таблица уже есть.
+`get_all()` (в порядке добавления), `get_by_id(id)`, `save(inbound)` — добавить или
+обновить по `id` (порт другого inbound — `sqlite3.IntegrityError`), `delete(id)` →
+`bool`, `set_error(id, error)` — только поле `error`. Пароль хранится в БД открытым
+текстом, как адреса подписок.
+
 Каждый геттер читает актуальные данные из БД и создаёт модельные структуры.
 Запись и удаление выполняются в транзакции БД; при ошибке изменения откатываются.
 Одинаковый URL у разных ID запрещён: `subscription_link.save` вызывает
@@ -1294,10 +1349,12 @@ TLS поверх SOCKS-туннеля поднимает сам `outbound_probe`
 
 ```python
 from server.cores.xray.xray_client import XrayClient
+from server.models import InboundServer, InboundType
 
 client = XrayClient()
-await client.service_start(proxy_port=1080, test_port=1081)
+await client.service_start(test_port=1081)
 try:
+    await client.inbound_set(InboundServer(type=InboundType.PROXY, proxy_port=1080))
     await client.outbound_register([selected_server, candidate_server, another_server])
     await client.outbound_connect(selected_server.id)
     await client.test_connect(candidate_server.id)
@@ -1308,18 +1365,37 @@ finally:
     await client.service_stop()
 ```
 
-- Все операции нужно вызывать последовательно из одного event loop.
+- Операции вызываются из одного event loop. Запуск и остановку вызывают
+  последовательно; смены inbound, серверов и маршрутов клиент сам выполняет
+  по одной, поэтому inbound можно менять, пока идёт проверка сервера.
 - `check_outbound_server_config(server)` — синхронная проверка параметров сервера
   ядром: собирает конфиг этого ядра и вызывает `ValueError`, если не может. Не ходит
   в сеть, не требует запущенного ядра и ничего не меняет. Работоспособность сервера
   проверяет приложение (раздел «Проверка серверов»), а не клиент ядра.
-- SOCKS5 слушает только `127.0.0.1`, без аутентификации, с поддержкой UDP.
-  Порты задаются явно в диапазоне 1–65535. Текущие порты доступны в
-  `proxy_port` и `test_port`; `test_port` объявлен в интерфейсе `CoreClient`
-  (`None`, пока сервис остановлен).
-- Без выбранного outbound трафик соответствующего inbound блокируется.
-  Оба listener создаются при запуске. `test_connect` задаёт маршрут,
-  но не выполняет сетевую проверку сервера.
+- Тестовый SOCKS5 слушает только `127.0.0.1`, без аутентификации, с поддержкой UDP;
+  он создаётся при запуске, его порт — `test_port` (`None`, пока сервис остановлен).
+  `test_connect` задаёт маршрут, но не выполняет сетевую проверку сервера.
+- `check_inbound_config(inbound)` — синхронная проверка, что ядро соберёт listener
+  (`ValueError` для неподдерживаемого типа), без сети и запущенного ядра.
+- `inbound_set(inbound)` запускает listener inbound или заменяет запущенный с тем же
+  `id`; его трафик идёт основным маршрутом. Серверы и оба маршрута сохраняются.
+  Перед применением клиент проверяет `bind` нового порта (или нового адреса на
+  свободном порту, если порт тот же), после — SOCKS5-рукопожатием, что listener
+  отвечает. Неудача — `InboundError` с текстом для клиента и полем `field`
+  (`proxy_port` или `proxy_listen`); прежний listener с этим `id` остаётся.
+  Тот же inbound повторно ничего не меняет. `inbound_delete(id)` останавливает
+  listener, неизвестный `id` игнорируется. `service_stop` закрывает все.
+- Mihomo принимает конфиг только целиком, поэтому `MihomoClient` помнит
+  зарегистрированные серверы, inbound и выбранные в группах серверы. Каждый inbound —
+  listener `mixed` с именем `id` и правило `IN-NAME,<id>,main`. Выбранный сервер
+  стоит в группе первым, поэтому новый конфиг не сбивает маршруты; listener с
+  неизменным конфигом Mihomo не перезапускает, соединения через него не рвутся.
+  Listener, который Mihomo не смог открыть, он только пишет в лог, поэтому после
+  неудачной проверки клиент возвращает прежний конфиг.
+- Xray: inbound — SOCKS-inbound с тегом `inbound-<id>` (он принимает и HTTP),
+  все такие теги — в правиле основного маршрута. При замене прежний inbound
+  удаляется до добавления нового, при ошибке возвращается.
+- Без выбранного outbound трафик соответствующего маршрута блокируется.
 - `outbound_register` полностью заменяет список, сбрасывая оба маршрута в блокировку.
   `outbound_connect(id)` и `test_connect(id)` выбирают уже зарегистрированный сервер.
   Переключение не удаляет остальные регистрации. Xray проверяет наличие ID через gRPC.
@@ -1328,8 +1404,8 @@ finally:
   соединения не переносятся на другой сервер и не закрываются принудительно.
 - `outbound_disconnect` так же блокирует основной маршрут; `outbound_connect(id)`
   снова его открывает.
-- Порты фиксируются при `service_start(proxy_port, test_port)`. Методы `change_port`
-  и `test_start` удалены из интерфейса; смена портов выполняется остановкой и запуском.
+- Тестовый порт фиксируется при `service_start(test_port)`; порты inbound меняет
+  `inbound_set`.
 - Клиент управляет всей таблицей правил. Не изменяйте её параллельно через
   низкоуровневый gRPC-клиент. `service_start` требует остановленного сервиса;
   `service_stop` закрывает gRPC и останавливает процесс.
