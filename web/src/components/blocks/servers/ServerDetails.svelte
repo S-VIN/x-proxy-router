@@ -15,11 +15,10 @@
   interface Props {
     id: string;
     server: OutboundServer;
-    subscription: string;
     tests: readonly OutboundTest[];
   }
 
-  let { id, server, subscription, tests }: Props = $props();
+  let { id, server, tests }: Props = $props();
 
   interface Entry {
     label: string;
@@ -29,12 +28,11 @@
 
   // The rest of the fields, only those with values: protocol-specific ones are null
   // for other protocols, some are empty. Protocol, transport and security are in the
-  // key figures.
+  // stats above; the subscription is in the row.
   const entries = $derived.by(() => {
     const s = server;
     const list: (Entry | false)[] = [
       { label: 'Address', value: `${s.address}:${s.port}`, mono: true },
-      { label: 'Subscription', value: subscription },
       s.source_tag !== null && { label: 'Provider tag', value: s.source_tag },
       s.server_name !== null && { label: 'SNI', value: s.server_name, mono: true },
       s.fingerprint !== null && { label: 'Fingerprint', value: s.fingerprint },
@@ -81,72 +79,68 @@
   );
 </script>
 
+<!-- Part of the expanded row: it shares the row's background and its left edge. -->
 <div class="details" {id}>
-  <div class="card">
-    {#if server.filtered !== null}
-      <p class="filtered">
-        <Icon name="filter" size={14} />
-        <span>
-          {server.is_connected
-            ? 'Filtered: it stays connected, but cannot be connected again after a switch.'
-            : 'Filtered: it cannot be connected.'}
-          {filterText(server.filtered)}
-        </span>
-      </p>
-    {/if}
+  {#if server.filtered !== null}
+    <p class="filtered">
+      <Icon name="filter" size={14} />
+      <span>
+        {server.is_connected
+          ? 'Filtered: it stays connected, but cannot be connected again after a switch.'
+          : 'Filtered: it cannot be connected.'}
+        {filterText(server.filtered)}
+      </span>
+    </p>
+  {/if}
 
-    <dl class="key">
-      <Stat tile label="Ping" tone={pingTone(server.ping)}>{formatPing(server.ping)}</Stat>
-      <Stat tile label="Speed" tone={server.speed === 0 ? 'danger' : 'neutral'}>
-        {formatSpeed(server.speed)}
-      </Stat>
-      <Stat tile label="Protocol">{stackLabel(server)}</Stat>
-    </dl>
-
+  <dl class="stats">
+    <Stat label="Ping" tone={pingTone(server.ping)}>{formatPing(server.ping)}</Stat>
+    <Stat label="Speed" tone={server.speed === 0 ? 'danger' : 'neutral'}>
+      {formatSpeed(server.speed)}
+    </Stat>
+    <Stat label="Protocol">{stackLabel(server)}</Stat>
     {#if results.length > 0}
       <div class="tests">
-        <span class="caption">Last test results</span>
-        <ul class="results">
-          {#each results as item (item.id)}
-            <li class="result" class:failed={!item.passed}>
-              <Icon name={item.passed ? 'check' : 'close'} size={12} />
-              {item.label}<span class="visually-hidden">: {item.passed ? 'passed' : 'failed'}</span>
-            </li>
-          {/each}
-        </ul>
+        <dt>Last tests</dt>
+        <dd>
+          <ul class="results">
+            {#each results as item (item.id)}
+              <li class="result" class:failed={!item.passed}>
+                <Icon name={item.passed ? 'check' : 'close'} size={12} />
+                {item.label}<span class="visually-hidden"
+                  >: {item.passed ? 'passed' : 'failed'}</span
+                >
+              </li>
+            {/each}
+          </ul>
+        </dd>
       </div>
     {/if}
+  </dl>
 
-    <dl class="grid">
-      {#each entries as entry (entry.label)}
-        <div class="entry">
-          <dt>{entry.label}</dt>
-          <dd class:mono={entry.mono}>{entry.value}</dd>
-        </div>
-      {/each}
-    </dl>
-  </div>
+  <!-- One line per value; long ones end with … and show whole on hover. -->
+  <dl class="fields">
+    {#each entries as entry (entry.label)}
+      <div class="field">
+        <dt>{entry.label}</dt>
+        <dd class:mono={entry.mono} title={entry.value}>{entry.value}</dd>
+      </div>
+    {/each}
+  </dl>
 </div>
 
 <style>
   .details {
-    padding: 0 var(--space-3) var(--space-2);
-  }
-
-  .card {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    padding: var(--space-2);
-    border-radius: var(--radius-md);
-    background: var(--color-surface-sunken);
+    padding: 2px var(--space-3) var(--space-3);
   }
 
   .filtered {
     display: flex;
     align-items: flex-start;
     gap: var(--space-1);
-    padding: 0 2px;
     color: var(--color-text-muted);
     font-size: var(--text-sm);
   }
@@ -156,25 +150,22 @@
     margin-top: 3px;
   }
 
-  /* Key figures: framed, with large values. The protocol takes the most room. */
-  .key {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr);
-    gap: var(--space-2);
-  }
-
-  .tests {
+  .stats {
     display: flex;
     flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-1) var(--space-2);
-    padding: 0 2px;
+    gap: var(--space-2) var(--space-5);
   }
 
-  .caption {
+  dt {
     color: var(--color-text-muted);
     font-size: var(--text-xs);
     font-weight: var(--weight-medium);
+  }
+
+  .tests dd {
+    display: flex;
+    min-height: calc(var(--text-sm) * var(--leading-normal));
+    align-items: center;
   }
 
   .results {
@@ -193,7 +184,7 @@
     color: var(--color-success-text);
     font-size: var(--text-xs);
     font-weight: var(--weight-medium);
-    line-height: 1.6;
+    line-height: 1.5;
   }
 
   .result.failed {
@@ -201,38 +192,23 @@
     color: var(--color-danger-text);
   }
 
-  /* Everything else: smaller and quieter than the key figures. */
-  .grid {
+  /* Everything else: quieter than the stats, in as many columns as fit. */
+  .fields {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
-    gap: var(--space-2) var(--space-3);
-    padding: var(--space-2) 2px 0;
+    grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+    gap: var(--space-2) var(--space-4);
+    padding-top: var(--space-2);
     border-top: 1px solid var(--color-border);
   }
 
-  .entry {
+  .field {
     min-width: 0;
   }
 
-  dt {
-    color: var(--color-text-muted);
-    font-size: var(--text-xs);
-    font-weight: var(--weight-medium);
-  }
-
-  dd {
-    color: var(--color-text-muted);
+  .field dd {
+    overflow: hidden;
     font-size: var(--text-sm);
-    overflow-wrap: anywhere;
-  }
-
-  @container block (width < 440px) {
-    .key {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .key > :global(:last-child) {
-      grid-column: 1 / -1;
-    }
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>

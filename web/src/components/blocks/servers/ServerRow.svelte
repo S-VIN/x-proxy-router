@@ -110,13 +110,18 @@
     </div>
   {/if}
   {#if expanded}
-    <ServerDetails {id} {server} {subscription} {tests} />
+    <ServerDetails {id} {server} {tests} />
   {/if}
 </li>
 
 <style>
   .row {
     border-top: 1px solid var(--color-border);
+  }
+
+  /* The details below the line are part of the row: one background for both. */
+  .row.expanded {
+    background: var(--color-surface-sunken);
   }
 
   .row.connected {
