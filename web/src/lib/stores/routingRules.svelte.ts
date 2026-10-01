@@ -22,9 +22,9 @@ export class RoutingRulesStore {
     return this.#connection.request('add/routing_rule', { reg, action });
   }
 
-  /** Omitted fields keep their values; a new priority moves the rule there. */
-  change(id: string, changes: { priority?: number; reg?: string; action?: RoutingAction }) {
-    return this.#connection.request('change/routing_rule', { id, ...changes });
+  /** Puts the rule at the priority; the rules in between shift towards its old place. */
+  move(id: string, priority: number) {
+    return this.#connection.request('change/routing_rule', { id, priority });
   }
 
   remove(id: string) {

@@ -109,7 +109,7 @@ main-процесса или загружайте интерфейс через 
 
 | Поле | Тип | Смысл |
 | --- | --- | --- |
-| `model` | string | имя модели: `server_settings`, `subscription_link`, `reg_filter`, `outbound_server`, `inbound_server`, `routing_rule`, `task` |
+| `model` | string | имя модели: `server_settings`, `subscription_link`, `reg_filter`, `outbound_test`, `outbound_server`, `inbound_server`, `routing_rule`, `task` |
 | `refresh` | boolean | `true` — полный снимок, `false` — изменения |
 | `payload` | array | объекты модели **целиком**, со всеми полями |
 | `deleted_ids` | array | `id` удалённых объектов; в снимке всегда пустой |
@@ -125,10 +125,11 @@ main-процесса или загружайте интерфейс через 
 1. `server_settings`
 2. `subscription_link`
 3. `reg_filter`
-4. `outbound_server`
-5. `inbound_server`
-6. `routing_rule`
-7. `task`
+4. `outbound_test`
+5. `outbound_server`
+6. `inbound_server`
+7. `routing_rule`
+8. `task`
 
 Клиент **заменяет** коллекцию модели содержимым `payload`: объекты, которых нет
 в снимке, удаляются. Так после переподключения исчезают объекты, удалённые, пока
@@ -197,37 +198,13 @@ UUID, пароли, ключи авторизации, сырые настрой
 | `id` | integer | всегда `0` |
 | `subscription_refresh_interval` | integer | интервал автоматического обновления подписок в секундах, больше 0; по умолчанию 86400 (сутки). Отсчёт идёт от запуска сервера или от последнего изменения интервала; обновления по запросам расписание не сдвигают |
 | `last_subscription_refresh` | string \| null | время последнего успешного обновления подписок ([формат](#время)); `null`, пока обновления не было. Ведёт сервер |
-| `outbound_tests` | array | проверки, которые проходят серверы, — объекты `OutboundTest` |
 | `auto_connect` | boolean | режим [автоподключения](#автоподключение): сервер сам выбирает, к какому серверу подключаться, и меняет его, когда соединение стало плохим. По умолчанию `false`. Выключается, когда клиент сам выбирает сервер (`connect_outbound_server`) и когда подключённый сервер попадает под фильтр по имени |
-
-`OutboundTest`:
-
-| Поле | Тип | Смысл |
-| --- | --- | --- |
-| `url` | string | HTTP(S)-адрес, который запрашивается через проверяемый сервер |
-| `alias` | string | непустое имя проверки, уникальное в списке; ключ в `outbound_server.tests` |
-| `rule` | string | какой HTTP-статус ответа считается успехом, см. таблицу ниже |
-
-| `rule` | проверка пройдена, если статус |
-| --- | --- |
-| `status_204` | ровно 204 |
-| `status_2xx` | 200–299 |
-| `status_below_400` | меньше 400 |
-| `status_below_500` | меньше 500 |
-| `status_below_503` | меньше 503 |
-| `any_status` | любой: сайт ответил |
-
-Нет ответа (таймаут, ошибка соединения или TLS) — проверка не пройдена при любом правиле.
-Редиректы не выполняются: статус 3xx и есть ответ.
 
 ```json
 {
   "id": 0,
   "subscription_refresh_interval": 86400,
   "last_subscription_refresh": "2026-09-27T12:00:00Z",
-  "outbound_tests": [
-    { "url": "https://www.gstatic.com/generate_204", "alias": "google", "rule": "status_204" }
-  ],
   "auto_connect": false
 }
 ```
@@ -235,7 +212,8 @@ UUID, пароли, ключи авторизации, сырые настрой
 ### subscription_link
 
 Ссылки на подписки провайдеров. Полный адрес ссылки секретный и клиентам
-не отправляется, даже тому, кто её добавил.
+не отправляется, даже тому, кто её добавил. Ссылку можно добавить и удалить,
+изменить нельзя: её удаляют и добавляют новую.
 
 | Поле | Тип | Смысл |
 | --- | --- | --- |
@@ -267,6 +245,41 @@ UUID, пароли, ключи авторизации, сырые настрой
 
 ```json
 { "id": "5f0e2b1c-7a47-4c1d-9a55-0c3f5b0d8e21", "reg": "*russia*" }
+```
+
+### outbound_test
+
+Проверки, которые проходят серверы: при проверке сервера каждый `url` запрашивается
+через него. Проверку можно добавить и удалить, изменить нельзя: её удаляют и
+добавляют новую. По умолчанию проверок нет.
+
+| Поле | Тип | Смысл |
+| --- | --- | --- |
+| `id` | string | UUID, выдаёт сервер при добавлении; ключ в `outbound_server.tests` |
+| `url` | string | HTTP(S)-адрес, который запрашивается через проверяемый сервер; уникальный среди проверок |
+| `rule` | string | какой HTTP-статус ответа считается успехом, см. таблицу ниже |
+
+| `rule` | проверка пройдена, если статус |
+| --- | --- |
+| `status_204` | ровно 204 |
+| `status_2xx` | 200–299 |
+| `status_below_400` | меньше 400 |
+| `status_below_500` | меньше 500 |
+| `status_below_503` | меньше 503 |
+| `any_status` | любой: сайт ответил |
+
+Нет ответа (таймаут, ошибка соединения или TLS) — проверка не пройдена при любом правиле.
+Редиректы не выполняются: статус 3xx и есть ответ.
+
+Имени у проверки нет: клиент называет её по сайту из `url`, например `gstatic`
+для `https://www.gstatic.com/generate_204`.
+
+```json
+{
+  "id": "8d3f6a2e-4b1c-4f7a-9e05-2c6b8a1d7f34",
+  "url": "https://www.gstatic.com/generate_204",
+  "rule": "status_204"
+}
 ```
 
 ### outbound_server
@@ -316,7 +329,7 @@ UUID, пароли, ключи авторизации, сырые настрой
 | `ping` | integer \| null | лучшее время TCP-подключения к серверу, мс, не больше 500. `null` — не проверялся, не ответил или не TCP (Hysteria не пингуется) |
 | `speed` | integer \| null | скорость загрузки через сервер, байт/с. `null` — не проверялся или не ответил на пинг; `0` — загрузка не удалась |
 | `rating` | integer \| null | оценка 0–100, больше — лучше. `null` — не проверялся; `0` — недоступен или провалил все проверки |
-| `tests` | object \| null | результаты `outbound_tests`: `alias` → `true`/`false`. `null` — не проверялся. После удаления или переименования проверки старый ключ остаётся до следующей проверки сервера |
+| `tests` | object \| null | результаты проверок [`outbound_test`](#outbound_test): `id` проверки → `true`/`false`. `null` — не проверялся. После удаления проверки её ключ остаётся до следующей проверки сервера, а у добавленной ключа нет, пока сервер не проверят снова |
 | `filtered` | string \| null | почему сервер отфильтрован: `by_reg_filter`, `by_ping`, `by_subscription`; `null` — не отфильтрован. См. [фильтрацию](#фильтрация) |
 | `is_connected` | boolean | основной трафик ядра идёт через этот сервер; `true` не больше чем у одного сервера |
 
@@ -362,7 +375,8 @@ UUID, пароли, ключи авторизации, сырые настрой
   "host": null, "path": null, "service_name": null, "grpc_mode": null, "xhttp_mode": null,
   "vless_flow": "xtls-rprx-vision", "shadowsocks_method": null,
   "shadowsocks_udp_over_tcp": null, "shadowsocks_uot_version": null, "hysteria_version": null,
-  "ping": 42, "speed": 250000, "rating": 91, "tests": { "google": true }, "filtered": null,
+  "ping": 42, "speed": 250000, "rating": 91,
+  "tests": { "8d3f6a2e-4b1c-4f7a-9e05-2c6b8a1d7f34": true }, "filtered": null,
   "is_connected": true
 }
 ```
@@ -374,8 +388,8 @@ UUID, пароли, ключи авторизации, сырые настрой
 плохим, но старается делать это редко.
 
 Кроме полных проверок раз в час ([`test_outbound_servers`](#task)), сервер каждую
-минуту быстро проверяет подключённый сервер: пинг и `outbound_tests`, без замера
-скорости. Если тестов в настройках нет, запрашивается
+минуту быстро проверяет подключённый сервер: пинг и [`outbound_test`](#outbound_test),
+без замера скорости. Если проверок нет, запрашивается
 `https://www.gstatic.com/generate_204`. Результаты быстрых проверок клиентам не
 приходят. Для выбора используется рейтинг, сглаженный по полным проверкам: один
 удачный или неудачный замер сдвигает его только наполовину.
@@ -562,9 +576,9 @@ UUID, пароли, ключи авторизации, сырые настрой
 ```json
 {
   "type": "change",
-  "model": "subscription_link",
+  "model": "routing_rule",
   "request_id": "7",
-  "payload": { "id": "dbb5c053-1611-4bfe-b81c-a5ed2973a2a1", "url": "https://example.com/new" }
+  "payload": { "id": "6a1d1b0e-2f8c-4c39-a3a5-0b7f2a9e4d11", "priority": 1 }
 }
 ```
 
@@ -610,7 +624,7 @@ UUID, пароли, ключи авторизации, сырые настрой
 ```json
 {
   "type": "response",
-  "model": "subscription_link",
+  "model": "routing_rule",
   "request_id": "7",
   "ok": true,
   "payload": {}
@@ -625,13 +639,13 @@ UUID, пароли, ключи авторизации, сырые настрой
 ```json
 {
   "type": "response",
-  "model": "subscription_link",
+  "model": "routing_rule",
   "request_id": "7",
   "ok": false,
   "payload": {},
   "error": {
     "code": "not_found",
-    "message": "Subscription link not found",
+    "message": "Routing rule not found",
     "details": { "field": "id" }
   }
 }
@@ -660,11 +674,11 @@ UUID, пароли, ключи авторизации, сырые настрой
 
 | `code` | Когда | `details` |
 | --- | --- | --- |
-| `bad_request` | не JSON-объект; `request_id`, `type` или `model` не непустая строка; `payload` не объект; нет обязательного поля, есть неизвестное или у поля неверный тип | `{field}` — имя поля, для вложенных — путь, например `outbound_tests[1].rule`; для ошибок самого сообщения — `{}` |
-| `unknown_request` | нет запроса с такой парой `type` + `model` | `{}` |
-| `validation_error` | значение неверно по смыслу: URL не HTTP(S), интервал ≤ 0, неизвестное правило проверки, повторяющийся alias, пустой или неверный шаблон, `priority` вне допустимых | `{field}`, если поле известно, иначе `{}` |
+| `bad_request` | не JSON-объект; `request_id`, `type` или `model` не непустая строка; `payload` не объект; нет обязательного поля, есть неизвестное или у поля неверный тип | `{field}` — имя поля; для ошибок самого сообщения — `{}` |
+| `unknown_request` | нет запроса с такой парой `type` + `model`, например `change` для `subscription_link` | `{}` |
+| `validation_error` | значение неверно по смыслу: URL не HTTP(S), интервал ≤ 0, неизвестное правило проверки, пустой или неверный шаблон, `priority` вне допустимых | `{field}`, если поле известно, иначе `{}` |
 | `not_found` | объекта с таким `id` нет | `{field: "id"}` |
-| `conflict` | противоречит текущему состоянию: URL подписки, фильтр или правило роутинга с таким шаблоном уже добавлены; проверка серверов во время обновления подписок; подключение к отфильтрованному серверу; порт inbound занят | см. справочник |
+| `conflict` | противоречит текущему состоянию: URL подписки или проверки, фильтр или правило роутинга с таким шаблоном уже добавлены; проверка серверов во время обновления подписок; подключение к отфильтрованному серверу; порт inbound занят | см. справочник |
 | `subscription_error` | подписки не загрузились; серверы остались прежними | `{failed_id}` — `id` ссылки, которая не загрузилась; у `add` ещё `{id}` новой ссылки |
 | `core_error` | ядро прокси не выполнило действие; причина только в логе сервера | `{id}` сервера, inbound или правила роутинга |
 | `cancelled` | долгую задачу, которой ждал запрос, остановила другая задача или остановка сервера | `{}` |
@@ -675,17 +689,18 @@ UUID, пароли, ключи авторизации, сырые настрой
 | `type` | `model` | `payload` | Ответ `payload` |
 | --- | --- | --- | --- |
 | `add` | `subscription_link` | `{url}` | `{id}` |
-| `change` | `subscription_link` | `{id, url?}` | `{}` |
 | `delete` | `subscription_link` | `{id}` | `{}` |
 | `add` | `reg_filter` | `{reg}` | `{id}` |
 | `delete` | `reg_filter` | `{id}` | `{}` |
+| `add` | `outbound_test` | `{url, rule}` | `{id}` |
+| `delete` | `outbound_test` | `{id}` | `{}` |
 | `add` | `inbound_server` | `{type, proxy_port, enabled?, proxy_listen?, proxy_username?, proxy_password?}` | `{id}` |
 | `change` | `inbound_server` | `{id, enabled?, proxy_listen?, proxy_port?, proxy_username?, proxy_password?}` | `{}` |
 | `delete` | `inbound_server` | `{id}` | `{}` |
 | `add` | `routing_rule` | `{reg, action, priority?}` | `{id}` |
 | `change` | `routing_rule` | `{id, priority?, reg?, action?}` | `{}` |
 | `delete` | `routing_rule` | `{id}` | `{}` |
-| `change` | `server_settings` | `{id: 0, subscription_refresh_interval?, outbound_tests?, auto_connect?}` | `{}` |
+| `change` | `server_settings` | `{id: 0, subscription_refresh_interval?, auto_connect?}` | `{}` |
 | `request` | `refresh_subscriptions` | `{}` | `{}` |
 | `request` | `test_outbound_servers` | `{}` | `{}` |
 | `request` | `connect_outbound_server` | `{id}` | `{}` |
@@ -712,24 +727,10 @@ UUID, пароли, ключи авторизации, сырые настрой
 | `subscription_error` `{id, failed_id}` | ссылка сохранена, но какая-то подписка не загрузилась | ссылка **добавлена** и пришла в `subscription_link`; серверы прежние |
 | `cancelled` | обновление остановлено остановкой сервера | ссылка добавлена |
 
-### change / subscription_link
-
-Меняет адрес ссылки. Серверы не перезагружаются: новые серверы появятся после
-следующего обновления подписок.
-
-- **payload:** `{"id": "<uuid>", "url": "https://..."}`; `url` можно не передавать.
-- **Ответ:** `{}`. До ответа приходит `subscription_link`, если изменился `url_short`.
-
-| Ошибка | Когда |
-| --- | --- |
-| `bad_request` `{field}` | нет `id`, неверный тип, лишнее поле (например, `url_short`) |
-| `not_found` `{field: "id"}` | ссылки нет |
-| `validation_error` | URL не HTTP(S) |
-| `conflict` `{field: "url"}` | этот URL уже у другой ссылки |
-
 ### delete / subscription_link
 
-Удаляет ссылку. Её серверы остаются до следующего обновления подписок.
+Удаляет ссылку. Её серверы остаются до следующего обновления подписок. Изменить
+ссылку нельзя: её удаляют и добавляют новую.
 
 - **payload:** `{"id": "<uuid>"}`.
 - **Ответ:** `{}`. До ответа приходит `subscription_link` с `deleted_ids: ["<uuid>"]`.
@@ -773,6 +774,36 @@ UUID, пароли, ключи авторизации, сырые настрой
 | --- | --- |
 | `bad_request` `{field}` | нет `id`, неверный тип, лишнее поле |
 | `not_found` `{field: "id"}` | фильтра нет |
+
+### add / outbound_test
+
+Добавляет проверку серверов. Серверы сразу не перепроверяются: проверка
+выполняется со следующей проверки каждого сервера.
+
+- **payload:** `{"url": "https://www.gstatic.com/generate_204", "rule": "status_204"}` —
+  оба поля обязательны ([модель](#outbound_test)).
+- **Ответ:** `{"id": "<uuid новой проверки>"}`.
+- **До ответа приходит:** `outbound_test` с новой проверкой.
+
+| Ошибка | Когда |
+| --- | --- |
+| `bad_request` `{field}` | нет `url` или `rule`, неверный тип, лишнее поле (в том числе `id`) |
+| `validation_error` `{field: "url"}` | URL не HTTP(S) или без хоста |
+| `validation_error` `{field: "rule"}` | неизвестное правило |
+| `conflict` `{field: "url"}` | проверка с таким URL уже есть |
+
+### delete / outbound_test
+
+Удаляет проверку. Изменить проверку нельзя: её удаляют и добавляют новую. Результат
+удалённой проверки остаётся в `tests` серверов до их следующей проверки.
+
+- **payload:** `{"id": "<uuid>"}`.
+- **Ответ:** `{}`. До ответа приходит `outbound_test` с `deleted_ids: ["<uuid>"]`.
+
+| Ошибка | Когда |
+| --- | --- |
+| `bad_request` `{field}` | нет `id`, неверный тип, лишнее поле |
+| `not_found` `{field: "id"}` | проверки нет |
 
 ### add / inbound_server
 
@@ -893,14 +924,12 @@ inbound, в том числе созданный по умолчанию.
 
 Меняет настройки сервера.
 
-- **payload:** `{"id": 0, "subscription_refresh_interval": 3600, "outbound_tests": [...],
-  "auto_connect": true}`. Обязателен только `id`, всегда `0`.
+- **payload:** `{"id": 0, "subscription_refresh_interval": 3600, "auto_connect": true}`.
+  Обязателен только `id`, всегда `0`.
   - `subscription_refresh_interval` — целое число секунд больше 0. Новое значение
     перезапускает таймер: следующее автоматическое обновление — через этот интервал
-    от момента изменения. То же значение и изменение только `outbound_tests` таймер
+    от момента изменения. То же значение и изменение только `auto_connect` таймер
     не трогают.
-  - `outbound_tests` — **полный** новый список `[{url, alias, rule}, ...]`: он заменяет
-    прежний, `[]` удаляет все проверки. У каждого элемента обязательны все три поля.
   - `auto_connect` — `true` или `false`. `true` включает
     [автоподключение](#автоподключение): сервер сразу выбирает сервер. `true` при
     включённом режиме ничего не меняет. `false` выключает режим, подключение
@@ -912,9 +941,9 @@ inbound, в том числе созданный по умолчанию.
 
 | Ошибка | Когда |
 | --- | --- |
-| `bad_request` `{field}` | нет `id`, неверный тип (например, `auto_connect` не `true`/`false`), лишнее поле; `outbound_tests` не массив (`outbound_tests`), элемент не объект (`outbound_tests[1]`), у элемента нет поля, лишнее поле или неверный тип (`outbound_tests[1].url`) |
+| `bad_request` `{field}` | нет `id`, неверный тип (например, `auto_connect` не `true`/`false`), лишнее поле (в том числе `outbound_tests`: проверки — отдельная модель [`outbound_test`](#outbound_test)) |
 | `not_found` `{field: "id"}` | `id` не `0` |
-| `validation_error` | интервал ≤ 0; неизвестное правило (`{field: "outbound_tests[1].rule"}`); URL проверки не HTTP(S) или пустой alias (`{field: "outbound_tests[1]"}`); повторяющийся alias (`{}`) |
+| `validation_error` | интервал ≤ 0 |
 
 ### request / refresh_subscriptions
 
@@ -1004,6 +1033,7 @@ inbound, в том числе созданный по умолчанию.
 клиент  ◄── subscription server_settings   refresh=true
 клиент  ◄── subscription subscription_link refresh=true
 клиент  ◄── subscription reg_filter        refresh=true
+клиент  ◄── subscription outbound_test     refresh=true
 клиент  ◄── subscription outbound_server   refresh=true
 клиент  ◄── subscription inbound_server    refresh=true
 клиент  ◄── subscription routing_rule      refresh=true
@@ -1116,6 +1146,7 @@ inbound, в том числе созданный по умолчанию.
 | `server_settings` | целое число `0` |
 | `subscription_link` | строка UUID |
 | `reg_filter` | строка UUID |
+| `outbound_test` | строка UUID |
 | `outbound_server` | строка из 12 шестнадцатеричных символов |
 | `inbound_server` | строка UUID |
 | `routing_rule` | строка UUID |

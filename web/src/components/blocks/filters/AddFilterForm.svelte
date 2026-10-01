@@ -59,12 +59,10 @@
       size="sm"
       variant="primary"
       icon="add"
+      label="Filter servers whose names match"
       busy={adding}
       disabled={!ready}
-      title="Filter servers whose names match"
-    >
-      Add
-    </Button>
+    />
   </div>
   {#if regError}
     <p class="invalid">{regError}</p>
@@ -90,6 +88,7 @@
 
   .row > :global(:first-child) {
     flex: 1;
+    min-width: 0;
   }
 
   .invalid {

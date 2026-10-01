@@ -1,4 +1,6 @@
 <script lang="ts">
+  import type { InboundType } from '../../lib/api/protocol';
+  import { INBOUND_TYPES } from '../../lib/inbounds';
   import { connection, inboundServers, serverSettings } from '../../lib/stores';
   import Block from '../layout/Block.svelte';
   import Button from '../ui/Button.svelte';
@@ -10,7 +12,8 @@
 
   // Snapshots of all models come together; settings are the first of them.
   const loading = $derived(serverSettings.current === null);
-  let adding = $state(false);
+  // The type of the inbound being added, if any.
+  let adding = $state<InboundType | null>(null);
 </script>
 
 <Block
@@ -35,18 +38,29 @@
       </ul>
     {/if}
     <div class="add">
-      {#if adding}
-        <InboundForm inbound={null} ready={connection.ready} onclose={() => (adding = false)} />
+      {#if adding !== null}
+        <InboundForm
+          inbound={null}
+          type={adding}
+          ready={connection.ready}
+          onclose={() => (adding = null)}
+        />
       {:else}
-        <Button
-          variant="flat"
-          size="sm"
-          icon="add"
-          disabled={!connection.ready}
-          onclick={() => (adding = true)}
-        >
-          Add inbound
-        </Button>
+        <!-- A button per type, so a new type is one more button. -->
+        <div class="types">
+          {#each INBOUND_TYPES as info (info.type)}
+            <Button
+              variant="primary"
+              size="sm"
+              icon="add"
+              title={info.description}
+              disabled={!connection.ready}
+              onclick={() => (adding = info.type)}
+            >
+              Add {info.label.toLowerCase()}
+            </Button>
+          {/each}
+        </div>
       {/if}
     </div>
   {/if}
@@ -66,7 +80,9 @@
     border-top: 1px solid var(--color-border);
   }
 
-  .add > :global(button) {
-    align-self: flex-start;
+  .types {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
 </style>

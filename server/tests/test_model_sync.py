@@ -149,7 +149,6 @@ class SerializationTests(unittest.TestCase):
                 "id": 0,
                 "subscription_refresh_interval": 60,
                 "last_subscription_refresh": "2026-09-26T12:00:00Z",
-                "outbound_tests": [],
                 "auto_connect": False,
             },
         )
@@ -158,21 +157,17 @@ class SerializationTests(unittest.TestCase):
 
     def test_outbound_tests_and_server_health(self):
         test = OutboundTest(
+            id="google",
             url="https://www.gstatic.com/generate_204",
-            alias="google",
             rule=OutboundTestRule.STATUS_204,
         )
-        data = serialize(ServerSettings(outbound_tests=(test,)))
-        assert isinstance(data, dict)
         self.assertEqual(
-            data["outbound_tests"],
-            [
-                {
-                    "url": "https://www.gstatic.com/generate_204",
-                    "alias": "google",
-                    "rule": "status_204",
-                }
-            ],
+            serialize(test),
+            {
+                "id": "google",
+                "url": "https://www.gstatic.com/generate_204",
+                "rule": "status_204",
+            },
         )
         unchecked = serialize(vless())
         assert isinstance(unchecked, dict)
@@ -325,6 +320,7 @@ class ApplicationSyncTests(unittest.IsolatedAsyncioTestCase):
                     ("server_settings", True, [serialize(ServerSettings())]),
                     ("subscription_link", True, [{"id": "s", "url_short": "https://e.com"}]),
                     ("reg_filter", True, []),
+                    ("outbound_test", True, []),
                     ("outbound_server", True, []),
                     ("inbound_server", True, [serialize(inbound)]),
                     ("routing_rule", True, []),

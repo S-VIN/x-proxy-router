@@ -76,12 +76,10 @@
       size="sm"
       variant="primary"
       icon="add"
+      label="Add the link and reload servers of all subscriptions"
       busy={adding}
       disabled={!ready}
-      title="Add the link and reload servers of all subscriptions"
-    >
-      Add
-    </Button>
+    />
   </div>
   {#if urlError}
     <p class="invalid">{urlError}</p>
@@ -107,6 +105,7 @@
 
   .row > :global(:first-child) {
     flex: 1;
+    min-width: 0;
   }
 
   .invalid {

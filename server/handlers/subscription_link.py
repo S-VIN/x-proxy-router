@@ -1,7 +1,6 @@
-"""Client requests that add, change and delete subscription links."""
+"""Client requests that add and delete subscription links; a link cannot be changed."""
 
 import sqlite3
-from dataclasses import replace
 
 from ..models.application_context import ApplicationContext
 from ..models.serialization import JsonValue
@@ -47,21 +46,6 @@ async def add_subscription_link(
             {"id": link.id, "failed_id": error.subscription_id},
         ) from None
     return {"id": link.id}
-
-
-async def change_subscription_link(
-    context: ApplicationContext, payload: dict[str, JsonValue]
-) -> dict[str, JsonValue]:
-    """payload: {id, url?}; omitted fields keep their values."""
-    expect_fields(payload, {"id"}, {"url"})
-    link = context.settings.subscription_link.get_by_id(field_value(payload, "id", str))
-    if link is None:
-        raise RequestError(ErrorCode.NOT_FOUND, "Subscription link not found", {"field": "id"})
-    if "url" in payload:
-        link = replace(link, url=field_value(payload, "url", str))
-    _save(context, link)
-    await context.sync.notify(MODEL)
-    return {}
 
 
 async def delete_subscription_link(

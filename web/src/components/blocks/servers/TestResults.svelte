@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { OutboundServer, OutboundTest } from '../../../lib/api/protocol';
   import { EMPTY } from '../../../lib/format';
+  import { outboundTests } from '../../../lib/stores';
 
   interface Props {
     results: OutboundServer['tests'];
@@ -11,7 +12,11 @@
   let { results, tests }: Props = $props();
 
   const items = $derived(
-    tests.map((test) => ({ alias: test.alias, passed: results?.[test.alias] ?? null })),
+    tests.map((test) => ({
+      id: test.id,
+      label: outboundTests.label(test.id),
+      passed: results?.[test.id] ?? null,
+    })),
   );
   const passed = $derived(items.filter((item) => item.passed === true).length);
   const checked = $derived(items.filter((item) => item.passed !== null).length);
@@ -21,7 +26,7 @@
       `${passed} of ${items.length} tests passed`,
       ...items.map(
         (item) =>
-          `${item.alias}: ${item.passed === null ? 'not checked' : item.passed ? 'passed' : 'failed'}`,
+          `${item.label}: ${item.passed === null ? 'not checked' : item.passed ? 'passed' : 'failed'}`,
       ),
     ].join('\n'),
   );
@@ -34,7 +39,7 @@
 {:else}
   <!-- A mark per test in the order of the Tests block: filled passed, hollow failed. -->
   <span class="results" role="img" aria-label={summary} title={summary}>
-    {#each items as item (item.alias)}
+    {#each items as item (item.id)}
       <span class="mark" class:passed={item.passed === true} class:failed={item.passed === false}
       ></span>
     {/each}

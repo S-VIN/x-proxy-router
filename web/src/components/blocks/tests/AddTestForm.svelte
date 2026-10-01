@@ -1,13 +1,9 @@
 <script lang="ts">
   import { describeError, RequestError } from '../../../lib/api/errors';
-  import type { RoutingAction } from '../../../lib/api/protocol';
-  import {
-    actionInfo,
-    normalizedPattern,
-    ROUTING_ACTIONS,
-    routingPatternError,
-  } from '../../../lib/routing';
-  import { routingRules } from '../../../lib/stores';
+  import type { TestRule } from '../../../lib/api/protocol';
+  import { ruleLabel, TEST_RULES } from '../../../lib/format';
+  import { outboundTests } from '../../../lib/stores';
+  import { testUrlError } from '../../../lib/validation';
   import Button from '../../ui/Button.svelte';
   import Notice from '../../ui/Notice.svelte';
   import Select from '../../ui/Select.svelte';
@@ -15,41 +11,40 @@
 
   let { ready }: { ready: boolean } = $props();
 
-  const actionOptions = ROUTING_ACTIONS.map((value) => ({
-    value,
-    label: actionInfo(value).label,
-  }));
+  const ruleOptions = TEST_RULES.map((value) => ({ value, label: ruleLabel(value) }));
 
-  let reg = $state('');
-  let action = $state<RoutingAction>('direct');
+  let url = $state('');
+  let rule = $state<TestRule>('status_2xx');
   let submitted = $state(false);
   let adding = $state(false);
   let error = $state<string | null>(null);
-  // The server's reason for rejecting a pattern, shown until it is edited.
-  let rejected = $state<{ reg: string; text: string } | null>(null);
+  // The server's reason for rejecting the URL, shown until it is edited.
+  let rejected = $state<{ url: string; text: string } | null>(null);
 
-  const regError = $derived(
-    (submitted ? routingPatternError(reg, routingRules.list) : null) ??
-      (rejected?.reg === reg ? rejected.text : null),
+  const urlError = $derived(
+    (submitted ? testUrlError(url, outboundTests.list) : null) ??
+      (rejected?.url === url ? rejected.text : null),
   );
 
   async function add(event: SubmitEvent) {
     event.preventDefault();
     submitted = true;
-    if (routingPatternError(reg, routingRules.list)) return;
+    if (testUrlError(url, outboundTests.list)) return;
     adding = true;
     error = null;
     rejected = null;
     try {
-      await routingRules.add(normalizedPattern(reg), action);
-      reg = '';
+      await outboundTests.add(url.trim(), rule);
+      url = '';
       submitted = false;
     } catch (reason) {
-      if (reason instanceof RequestError && reason.field === 'reg') {
+      if (reason instanceof RequestError && reason.field === 'url') {
         rejected = {
-          reg,
+          url,
           text:
-            reason.code === 'conflict' ? 'A rule for this address already exists.' : reason.message,
+            reason.code === 'conflict'
+              ? 'A test with this URL already exists.'
+              : 'Use an http:// or https:// URL with a host.',
         };
       } else {
         error = describeError(reason);
@@ -64,19 +59,20 @@
   <div class="row">
     <TextField
       size="sm"
-      class="mono"
-      placeholder="*.youtube.com"
-      aria-label="New rule: a domain or IP address pattern, e.g. *.youtube.com or 10.*"
-      title="A domain or an IP address; * stands for any characters: *.youtube.com, 10.*"
-      bind:value={reg}
-      invalid={regError !== null}
+      type="url"
+      inputmode="url"
+      placeholder="https://example.com/"
+      aria-label="New test: the URL to request"
+      bind:value={url}
+      invalid={urlError !== null}
       disabled={adding}
     />
     <Select
       size="sm"
-      aria-label="Where the traffic of the new rule goes"
-      bind:value={action}
-      options={actionOptions}
+      aria-label="The new test passes when the response status is"
+      title="Passes when the response status is"
+      bind:value={rule}
+      options={ruleOptions}
       disabled={adding}
     />
     <Button
@@ -84,13 +80,13 @@
       size="sm"
       variant="primary"
       icon="add"
-      label="Add the rule; it is checked after the others"
+      label="Add test"
       busy={adding}
       disabled={!ready}
     />
   </div>
-  {#if regError}
-    <p class="invalid">{regError}</p>
+  {#if urlError}
+    <p class="invalid">{urlError}</p>
   {/if}
   {#if error}
     <Notice tone="danger" ondismiss={() => (error = null)}>{error}</Notice>
@@ -106,12 +102,12 @@
     border-top: 1px solid var(--color-border);
   }
 
+  /* The URL takes the room the rule and the button leave. */
   .row {
     display: flex;
     gap: var(--space-2);
   }
 
-  /* The pattern takes the room the action and the button leave. */
   .row > :global(:first-child) {
     flex: 1;
     min-width: 0;

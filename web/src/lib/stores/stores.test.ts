@@ -4,6 +4,7 @@ import type { ModelName } from '../api/protocol';
 import { applyMessage } from './collection.svelte';
 import { InboundServersStore } from './inboundServers.svelte';
 import { OutboundServersStore } from './outboundServers.svelte';
+import { OutboundTestsStore } from './outboundTests.svelte';
 import { RegFiltersStore } from './regFilters.svelte';
 import { RoutingRulesStore } from './routingRules.svelte';
 import { ServerSettingsStore } from './serverSettings.svelte';
@@ -141,6 +142,30 @@ describe('stores', () => {
     ]);
   });
 
+  it('name tests after their sites and send their requests', () => {
+    const { connection, deliver } = fakeConnection();
+    const sent: unknown[] = [];
+    connection.request = ((key: string, payload: unknown) => {
+      sent.push([key, payload]);
+      return Promise.resolve({});
+    }) as Connection['request'];
+    const tests = new OutboundTestsStore(connection);
+    deliver('outbound_test', [
+      { id: 't1', url: 'https://www.gstatic.com/generate_204', rule: 'status_204' },
+      { id: 't2', url: 'https://web.telegram.org/', rule: 'status_below_400' },
+    ]);
+    deliver('outbound_test', [], false, ['t1']);
+    expect(tests.list.map((test) => test.id)).toEqual(['t2']);
+    expect(tests.label('t2')).toBe('telegram');
+    expect(tests.label('t1')).toBe('Removed test');
+    void tests.add('https://example.com/', 'any_status');
+    void tests.remove('t2');
+    expect(sent).toEqual([
+      ['add/outbound_test', { url: 'https://example.com/', rule: 'any_status' }],
+      ['delete/outbound_test', { id: 't2' }],
+    ]);
+  });
+
   it('keep inbounds and send their requests', () => {
     const { connection, deliver } = fakeConnection();
     const sent: unknown[] = [];
@@ -191,7 +216,7 @@ describe('stores', () => {
     );
     expect(rules.list.map((rule) => rule.id)).toEqual(['b', 'a']);
     void rules.add('*.youtube.com', 'block');
-    void rules.change('a', { priority: 1 });
+    void rules.move('a', 1);
     void rules.remove('b');
     expect(sent).toEqual([
       ['add/routing_rule', { reg: '*.youtube.com', action: 'block' }],

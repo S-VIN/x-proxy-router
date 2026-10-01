@@ -27,7 +27,6 @@ from server.models import (
     OutboundTest,
     OutboundTestRule,
     RegFilter,
-    ServerSettings,
     SubscriptionLink,
 )
 from server.models.application_context import ApplicationContext
@@ -66,8 +65,8 @@ def hysteria() -> OutboundServer:
     )
 
 
-def outbound_test(alias: str, url: str, rule: OutboundTestRule) -> OutboundTest:
-    return OutboundTest(url=url, alias=alias, rule=rule)
+def outbound_test(test_id: str, url: str, rule: OutboundTestRule) -> OutboundTest:
+    return OutboundTest(id=test_id, url=url, rule=rule)
 
 
 async def pipe(source: asyncio.StreamReader, destination: asyncio.StreamWriter) -> None:
@@ -322,7 +321,8 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
             ),
             outbound_test("site", "https://example.com/", OutboundTestRule.STATUS_BELOW_503),
         )
-        self.context.settings.server_settings.save(ServerSettings(outbound_tests=self.tests))
+        for test in self.tests:
+            self.context.settings.outbound_test.add(test)
 
     def saved(self, server: OutboundServer) -> OutboundServer:
         self.context.settings.outbound_server.save(server)
@@ -353,10 +353,10 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         events = []
 
         async def run_test(session, test):
-            events.append(f"start {test.alias}")
+            events.append(f"start {test.id}")
             await asyncio.sleep(0.01)
-            events.append(f"end {test.alias}")
-            return test.alias == "site"
+            events.append(f"end {test.id}")
+            return test.id == "site"
 
         async def speed(session):
             events.append("speed")
@@ -499,7 +499,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
 
     def full_rating(self) -> int:
         return handler.server_rating(
-            100, round(handler.FULL_SPEED), {test.alias: True for test in self.tests}
+            100, round(handler.FULL_SPEED), {test.id: True for test in self.tests}
         )
 
     async def test_servers_are_checked_one_after_another(self):
@@ -763,7 +763,8 @@ class MihomoCheckTests(ListenerTestCase):
             outbound_test("hang", f"{base}/hang", OutboundTestRule.ANY_STATUS),
             outbound_test("closed", f"http://127.0.0.1:{closed}/", OutboundTestRule.ANY_STATUS),
         )
-        self.context.settings.server_settings.save(ServerSettings(outbound_tests=tests))
+        for test in tests:
+            self.context.settings.outbound_test.add(test)
         server = vless(self.relay_port)
         dead = vless(free_port())
         self.context.settings.outbound_server.add_servers([server, dead])
@@ -821,12 +822,8 @@ class MihomoCheckTests(ListenerTestCase):
             self.assertEqual(response.status, 204)
 
     async def test_unreachable_server(self):
-        self.context.settings.server_settings.save(
-            ServerSettings(
-                outbound_tests=(
-                    outbound_test("a", "http://127.0.0.1/", OutboundTestRule.ANY_STATUS),
-                )
-            )
+        self.context.settings.outbound_test.add(
+            outbound_test("a", "http://127.0.0.1/", OutboundTestRule.ANY_STATUS)
         )
         dead = vless(free_port())
         self.context.settings.outbound_server.save(dead)
@@ -842,7 +839,7 @@ class MihomoCheckTests(ListenerTestCase):
     async def test_auto_connect_leaves_a_server_that_fails_quick_checks(self):
         base = f"http://127.0.0.1:{self.http_port}"
         test = outbound_test("204", f"{base}/status/204", OutboundTestRule.STATUS_204)
-        self.context.settings.server_settings.save(ServerSettings(outbound_tests=(test,)))
+        self.context.settings.outbound_test.add(test)
 
         async def broken(reader, writer):
             pass  # Accepts TCP, so it answers the ping, but proxies nothing.

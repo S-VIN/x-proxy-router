@@ -67,7 +67,7 @@ Inbound, который не запустился (например, порт з
   (`schedule_refresh_subscriptions` в `handlers/subscriptions.py`). Первый запуск — через
   интервал после старта: при старте подписки и так обновляет `init`. Когда клиент меняет
   интервал через `change` / `server_settings`, таймер перезапускается с новым значением
-  и отсчётом от момента изменения; изменение одних `outbound_tests` его не трогает.
+  и отсчётом от момента изменения; изменение одного `auto_connect` его не трогает.
   Обновления по запросам и после добавления ссылки расписание не сдвигают. Ошибка
   загрузки записывается в лог планировщиком, следующий запуск — по расписанию.
 - `test_outbound_servers` — раз в час (см. «Проверка серверов»).
@@ -87,6 +87,7 @@ Inbound, который не запустился (например, порт з
 | `tasks.py` | Долгие задачи: декоратор `long_task`, реестр `TaskRegistry` (`context.tasks`) |
 | `outbound_probe.py` | Сетевые проверки сервера: TCP-пинг, скорость и HTTP-тесты через тестовый inbound |
 | `handlers/auto_connect.py` | Алгоритм режима `auto_connect` и его состояние `AutoConnectState` (`context.auto_connect`) |
+| `handlers/outbound_test.py` | Запросы `add`/`delete` для `outbound_test` и проверки серверов: `test_outbound`, `test_outbound_servers`, `quick_test_outbound` |
 | `handlers/inbound_server.py` | Запросы `add`/`change`/`delete` для `inbound_server` и запуск inbound при старте, `start_inbound_servers` |
 | `models/inbound_server.py` | Модель `InboundServer`, типы `InboundType`, порт inbound по умолчанию `DEFAULT_PROXY_PORT` |
 | `handlers/routing_rule.py` | Запросы `add`/`change`/`delete` для `routing_rule` и передача правил ядру при старте, `apply_routing_rules` |
@@ -236,7 +237,7 @@ context.scheduler.remove_job("my-job")
 ```
 
 - `model` — имя коллекции: `server_settings`, `subscription_link`, `reg_filter`,
-  `outbound_server`, `inbound_server`, `routing_rule`, `task` (в этом порядке приходят снимки при подключении). `server_settings` —
+  `outbound_test`, `outbound_server`, `inbound_server`, `routing_rule`, `task` (в этом порядке приходят снимки при подключении). `server_settings` —
   коллекция из одного объекта с `id: 0`. `task` — долгие задачи сервера
   (раздел «Долгие задачи»).
 - `payload` — объекты целиком, как их возвращает `serialize()`.
@@ -296,8 +297,8 @@ password: str | None = field(default=None, repr=False, metadata=SECRET)
 Есть два вида запросов:
 
 - **Изменение модели** — `type` равен `add`, `change` или `delete`, в `model`
-  имя изменяемой модели (`subscription_link`, `reg_filter`, `server_settings`,
-  `inbound_server`, `routing_rule`).
+  имя изменяемой модели (`subscription_link`, `reg_filter`, `outbound_test`,
+  `server_settings`, `inbound_server`, `routing_rule`).
 - **Действие** — `type` всегда `request`, а само действие записано в `model`,
   например `refresh_subscriptions`. Новые действия, которые не сводятся
   к добавлению, изменению или удалению одной модели, добавляются только так,
@@ -333,14 +334,15 @@ password: str | None = field(default=None, repr=False, metadata=SECRET)
 | type | model | payload | ответ `payload` |
 | --- | --- | --- | --- |
 | `add` | `subscription_link` | `{url}` | `{id}`; ответ приходит после загрузки серверов всех подписок |
-| `change` | `subscription_link` | `{id, url?}` | `{}` |
 | `delete` | `subscription_link` | `{id}` | `{}` |
 | `add` | `reg_filter` | `{reg}` | `{id}` |
 | `delete` | `reg_filter` | `{id}` | `{}` |
+| `add` | `outbound_test` | `{url, rule}` | `{id}` |
+| `delete` | `outbound_test` | `{id}` | `{}` |
 | `add` | `routing_rule` | `{reg, action, priority?}` | `{id}` после передачи правил ядру |
 | `change` | `routing_rule` | `{id, priority?, reg?, action?}` | `{}` после передачи правил ядру |
 | `delete` | `routing_rule` | `{id}` | `{}` после передачи правил ядру |
-| `change` | `server_settings` | `{id: 0, subscription_refresh_interval?, outbound_tests?, auto_connect?}` | `{}` |
+| `change` | `server_settings` | `{id: 0, subscription_refresh_interval?, auto_connect?}` | `{}` |
 | `request` | `refresh_subscriptions` | `{}` | `{}` после загрузки всех подписок |
 | `request` | `test_outbound_servers` | `{}` | `{}` после проверки всех серверов |
 | `request` | `connect_outbound_server` | `{id}` | `{}` после переключения ядра |
@@ -383,17 +385,16 @@ password: str | None = field(default=None, repr=False, metadata=SECRET)
 
 `add` / `subscription_link` сначала дожидается идущего обновления (оно прочитало
 ссылки до добавления новой), а затем запускает своё, поэтому серверы новой ссылки
-всегда загружаются.
+всегда загружаются. Изменения ссылки нет: её удаляют и добавляют новую.
+
+`add` / `outbound_test` и `delete` / `outbound_test` добавляют и удаляют проверку
+серверов (`handlers/outbound_test.py`); до ответа клиенты получают `outbound_test`.
+Серверы сразу не перепроверяются. Неизвестное правило — `validation_error` с
+`details.field = "rule"`, URL не HTTP(S) — с `"url"`, такой URL уже есть —
+`conflict` с `"url"`. Изменения проверки нет: её удаляют и добавляют новую.
 
 В `change` передаются `id` и только изменяемые поля. Неизвестные поля отклоняются,
 в том числе `url_short` и `last_subscription_refresh`: их ведёт сервер.
-
-`outbound_tests` в `change` / `server_settings` — полный новый список
-`[{url, alias, rule}, ...]`: он заменяет прежний, `[]` удаляет все проверки.
-У каждого элемента обязательны все три поля, лишние отклоняются. Ошибки
-указывают элемент в `details.field`: `outbound_tests[1]` (элемент не объект
-или неверный URL/пустой alias), `outbound_tests[1].rule` (нет поля, неверный тип,
-неизвестное правило). Повторяющийся `alias` — `validation_error`.
 Результаты проверок серверов (`ping`, `speed`, `rating`, `tests`) клиенты
 не меняют: их записывает сервер.
 
@@ -407,9 +408,9 @@ password: str | None = field(default=None, repr=False, metadata=SECRET)
 | --- | --- |
 | `bad_request` | не JSON-объект; `request_id`, `type` или `model` не непустая строка; `payload` не объект; нет обязательного, есть неизвестное или неверного типа поле (`details.field`) |
 | `unknown_request` | нет хендлера для пары `type` + `model` |
-| `validation_error` | `ValueError` модели, например URL не HTTP(S), интервал ≤ 0, неизвестное правило или повторяющийся alias проверки |
+| `validation_error` | `ValueError` модели, например URL не HTTP(S), интервал ≤ 0, неизвестное правило проверки |
 | `not_found` | объекта с таким `id` нет |
-| `conflict` | `sqlite3.IntegrityError`, например одинаковый URL подписки |
+| `conflict` | `sqlite3.IntegrityError`, например одинаковый URL подписки или проверки |
 | `core_error` | ядро не выполнило действие; подробности только в логе сервера |
 | `cancelled` | долгую задачу остановила другая задача или остановка приложения (`TaskCancelled`) |
 | `subscription_error` | подписки не загрузились, серверы остались прежними. `details.failed_id` — подписка, которая не загрузилась. Для `add` ссылка всё равно сохранена, и в `details.id` — её id |
@@ -436,8 +437,7 @@ async def delete_subscription_link(context, payload):
 ```
 
 `field_value(payload, name, str | int | bool)` проверяет тип поля (`bool` не считается
-числом). Для вложенных объектов обе функции принимают `prefix`: с
-`prefix="outbound_tests[1]."` ошибка называет поле `outbound_tests[1].url`.
+числом).
 `RequestError(code, message, details)` отправляется клиенту как есть,
 поэтому в нём не должно быть секретов. Это относится и к тексту `ValueError`:
 он уходит клиенту в `validation_error`.
@@ -536,8 +536,8 @@ context.websocket.register(
 скользящие 24 часа. Отказы и выбор при включении режима в лимит не входят.
 
 **Быстрая проверка** — `quick_test_outbound` (раздел «Проверка серверов»): пинг и
-`outbound_tests` без замера скорости, ничего не записывается и клиентам не приходит.
-Если тестов в настройках нет, выполняется `REACHABILITY_TEST` (GET
+проверки `outbound_test` без замера скорости, ничего не записывается и клиентам не приходит.
+Если проверок нет, выполняется `REACHABILITY_TEST` (GET
 `https://www.gstatic.com/generate_204`, ожидается 204), чтобы проверялся сам прокси,
 а не только пинг. Проверка не прошла, если TCP-сервер не ответил на пинг, прошло
 меньше половины тестов или сама проверка упала (например, ядро не переключило
@@ -961,15 +961,15 @@ UUID и значения enum при импорте.
 - `ping: int | None` — задержка в миллисекундах;
 - `speed: int | None` — скорость загрузки в байтах в секунду;
 - `rating: int | None` — общая оценка для выбора сервера, больше — лучше;
-- `tests: dict[str, bool] | None` — результаты `ServerSettings.outbound_tests`:
-  alias проверки → прошёл ли сервер;
+- `tests: dict[str, bool] | None` — результаты проверок `OutboundTest`:
+  `id` проверки → прошёл ли сервер;
 - `filtered: FilterReason | None` — почему сервер отфильтрован (раздел
   «Фильтрация серверов»).
 
 `ping`, `speed` и `rating` должны быть неотрицательными целыми, значения `tests` —
 `bool`, иначе `ValueError`. Поля не секретные и приходят клиентам в `outbound_server`.
-Поля заполняет хендлер `test_outbound` (раздел «Проверка серверов»). После удаления или переименования проверки
-её старый alias остаётся в `tests` до следующей проверки сервера.
+Поля заполняет хендлер `test_outbound` (раздел «Проверка серверов»). После удаления проверки
+её `id` остаётся в `tests` до следующей проверки сервера.
 
 `is_connected: bool` (по умолчанию `False`) — основной маршрут ядра идёт через этот
 сервер. `True` бывает не больше чем у одного сервера, это держит и уникальный индекс
@@ -1028,20 +1028,18 @@ Enum используют канонические значения; альте�
 - `last_subscription_refresh: datetime | None` — время последнего обновления подписок
   в UTC; `None`, пока обновления не было. Принимается только datetime с часовым
   поясом, он приводится к UTC;
-- `outbound_tests: tuple[OutboundTest, ...]` — проверки, которые проходят
-  outbound-серверы; по умолчанию пусто. `alias` не должны повторяться, иначе `ValueError`.
-  Хранится кортежем, чтобы замороженная модель не менялась; клиентам уходит JSON-массив.
 - `auto_connect: bool` — режим автоподключения: сервер сам выбирает, к какому
   серверу подключаться (раздел «Автоподключение»). По умолчанию `False`;
   не `bool` — `ValueError`. Выключается, когда клиент сам выбирает сервер и когда
   подключённый сервер попадает под фильтр по имени.
 
 `OutboundTest` (`server/models/outbound_test.py`) — неизменяемое описание одной
-HTTP-проверки:
+HTTP-проверки, которую проходят outbound-серверы. Клиенты добавляют и удаляют
+проверки, но не меняют их. Имени у проверки нет: клиенты называют её по сайту из `url`.
 
+- `id: str` — строковый UUID по умолчанию, ключ в `OutboundServer.tests`;
 - `url: str` — HTTP(S)-адрес, который запрашивается через проверяемый сервер;
-  не секретный, клиенты его видят и меняют;
-- `alias: str` — непустое имя проверки, ключ в `OutboundServer.tests`;
+  не секретный, клиенты его видят; уникальный среди проверок;
 - `rule: OutboundTestRule` — какой HTTP-статус ответа считается успехом.
 
 | `OutboundTestRule` | проверка пройдена, если статус |
@@ -1078,10 +1076,17 @@ HTTP-проверки:
 `server_settings` ровно с одной строкой. Строка со значениями по умолчанию
 создаётся вместе с таблицей, а `CHECK (id = 0)` не даёт добавить вторую
 даже из другого соединения. `get()` возвращает текущие настройки, `save(settings)`
-заменяет их. Время хранится как TEXT в ISO 8601 с `+00:00`, `outbound_tests` —
-в колонке `outbound_tests` как JSON-массив объектов `{url, alias, rule}`,
+заменяет их. Время хранится как TEXT в ISO 8601 с `+00:00`,
 `auto_connect` — INTEGER 0 или 1. В БД, созданную до появления `auto_connect`,
 колонка добавляется при открытии со значением 0.
+
+`settings.outbound_test` (`OutboundTestStore`) хранит `OutboundTest` в таблице
+`outbound_tests` (`id`, `url`, `rule`, где `url` уникален): `get_all()` — в порядке
+добавления, `add(test)` (такой `id` или `url` уже есть — `sqlite3.IntegrityError`),
+`delete(id)` → `bool`. В БД, где проверки хранились в колонке
+`server_settings.outbound_tests` JSON-массивом `{url, alias, rule}`, при открытии
+они переносятся в таблицу с новыми `id`, ключи `tests` серверов меняются с alias
+на эти `id`, а колонка удаляется.
 
 ```python
 from dataclasses import replace
@@ -1288,7 +1293,7 @@ inbound (`test_stop` в `finally`), её результаты не записы�
    SOCKS5 `127.0.0.1:test_port`. Inbound один, поэтому проверки разных серверов ждут
    друг друга на `context.outbound_test_lock`; пинг идёт без лока и может выполняться
    параллельно. После шагов 3–4 всегда вызывается `test_stop()`, даже при ошибке.
-3. **Тесты.** `ServerSettings.outbound_tests` запускаются одновременно: GET по `url`,
+3. **Тесты.** Проверки `OutboundTest` запускаются одновременно: GET по `url`,
    статус сравнивается с `rule`. Редиректы не выполняются, тело не скачивается. Нет
    ответа за 1 с, ошибка TLS или соединения — `False`.
 4. **Скорость.** Скачивается файл ровно 250 000 байт (1 Мбит/с × 2 с) с

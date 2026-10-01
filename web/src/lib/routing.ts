@@ -54,15 +54,10 @@ function isIpv4Pattern(pattern: string): boolean {
 }
 
 /**
- * Why the server would reject the pattern of a rule, or null. The rules of the
+ * Why the server would reject the pattern of a new rule, or null. The rules of the
  * server/PROTOCOL.md routing_rule model; the server checks IPv6 addresses itself.
- * `id` is the rule being edited, which may keep its pattern.
  */
-export function routingPatternError(
-  value: string,
-  rules: readonly RoutingRule[],
-  id: string | null = null,
-): string | null {
+export function routingPatternError(value: string, rules: readonly RoutingRule[]): string | null {
   const pattern = normalizedPattern(value);
   if (!pattern) return 'Enter a domain or an IP address.';
   if (pattern.includes(':')) {
@@ -74,7 +69,7 @@ export function routingPatternError(
   } else if (!DOMAIN.test(pattern)) {
     return 'A domain may have only Latin letters, digits, -, _, . and *';
   }
-  if (rules.some((rule) => rule.id !== id && rule.reg === pattern)) {
+  if (rules.some((rule) => rule.reg === pattern)) {
     return 'A rule for this address already exists.';
   }
   return null;

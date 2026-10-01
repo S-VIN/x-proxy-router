@@ -13,18 +13,26 @@
     value: T;
     options: readonly Option<T>[];
     size?: 'md' | 'sm';
+    /** As wide as the chosen option, without a background until hovered: for block headers. */
+    inline?: boolean;
   }
 
-  let { value = $bindable(), options, size = 'md', ...rest }: Props = $props();
+  let { value = $bindable(), options, size = 'md', inline = false, ...rest }: Props = $props();
+
+  const chosen = $derived(options.find((option) => option.value === value)?.label ?? '');
 </script>
 
-<div class="select {size}">
+<div class="select {size}" class:inline>
+  {#if inline}
+    <!-- Sizes the control; the select on top of it shows the same text. -->
+    <span class="sizer" aria-hidden="true">{chosen}</span>
+  {/if}
   <select bind:value {...rest}>
     {#each options as option (option.value)}
       <option value={option.value}>{option.label}</option>
     {/each}
   </select>
-  <span class="chevron"><Icon name="chevron-down" /></span>
+  <span class="chevron"><Icon name="chevron-down" size={inline ? 12 : 16} /></span>
 </div>
 
 <style>
@@ -74,5 +82,37 @@
 
   .sm .chevron {
     right: var(--space-2);
+  }
+
+  .inline {
+    flex-shrink: 0;
+  }
+
+  .sizer,
+  .inline select {
+    padding: 0 calc(var(--space-1) + 12px + var(--space-1)) 0 6px;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    white-space: nowrap;
+  }
+
+  .sizer {
+    line-height: var(--control-height-sm);
+    visibility: hidden;
+  }
+
+  .inline select {
+    position: absolute;
+    inset: 0;
+    height: auto;
+    background: transparent;
+  }
+
+  .inline select:hover:not(:disabled) {
+    background: var(--color-hover);
+  }
+
+  .inline .chevron {
+    right: var(--space-1);
   }
 </style>

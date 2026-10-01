@@ -44,8 +44,11 @@
   @media (min-width: 760px) {
     .dashboard {
       display: grid;
-      /* The side column gives way first, so server rows stay on one line longer. */
-      grid-template-columns: minmax(0, 1fr) clamp(260px, 30vw, 320px);
+      /*
+       * The side blocks need about 320px for their rows to stay on one line; the
+       * servers fold their rows into two lines when narrower.
+       */
+      grid-template-columns: minmax(0, 1fr) clamp(320px, 36vw, 360px);
       grid-template-rows: minmax(0, 1fr);
       grid-template-areas: 'center side';
       flex: 1 1 auto;
@@ -74,9 +77,10 @@
     }
   }
 
-  @media (min-width: 1200px) {
+  /* Three columns once the servers keep about as much room as with two. */
+  @media (min-width: 1320px) {
     .dashboard {
-      grid-template-columns: minmax(250px, 300px) minmax(0, 1fr) minmax(250px, 300px);
+      grid-template-columns: minmax(300px, 320px) minmax(0, 1fr) minmax(300px, 320px);
       grid-template-areas: 'left center right';
     }
 

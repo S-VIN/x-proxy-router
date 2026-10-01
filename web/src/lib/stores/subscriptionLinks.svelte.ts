@@ -1,24 +1,11 @@
 import type { Connection } from '../api/connection.svelte';
 import type { SubscriptionLink } from '../api/protocol';
-import { siteLabel, TAG_COLORS } from '../format';
+import { siteLabels, TAG_COLORS } from '../format';
 import { Collection } from './collection.svelte';
 
 /** Short names for links: the site name, numbered when several links share it. */
 export function linkLabels(links: readonly SubscriptionLink[]): Map<string, string> {
-  const totals = new Map<string, number>();
-  for (const link of links) {
-    const host = siteLabel(link.url_short);
-    totals.set(host, (totals.get(host) ?? 0) + 1);
-  }
-  const seen = new Map<string, number>();
-  const labels = new Map<string, string>();
-  for (const link of links) {
-    const host = siteLabel(link.url_short);
-    const index = (seen.get(host) ?? 0) + 1;
-    seen.set(host, index);
-    labels.set(link.id, (totals.get(host) ?? 0) > 1 ? `${host} (${index})` : host);
-  }
-  return labels;
+  return siteLabels(links, (link) => link.url_short);
 }
 
 /** A tag color (1…count) for each link, in list order; they repeat after count links. */
@@ -29,7 +16,10 @@ export function linkColors(
   return new Map(links.map((link, index) => [link.id, (index % count) + 1]));
 }
 
-/** Provider subscription links. Full URLs are secret: only url_short comes back. */
+/**
+ * Provider subscription links, added and deleted but never changed. Full URLs are
+ * secret: only url_short comes back.
+ */
 export class SubscriptionLinksStore {
   #connection: Connection;
   #collection = new Collection<'subscription_link'>();
@@ -56,11 +46,6 @@ export class SubscriptionLinksStore {
   /** Adds the link and reloads servers of all subscriptions; resolves after that. */
   add(url: string) {
     return this.#connection.request('add/subscription_link', { url });
-  }
-
-  /** Replaces the URL; servers reload on the next refresh. */
-  change(id: string, url: string) {
-    return this.#connection.request('change/subscription_link', { id, url });
   }
 
   /** Removes the link; its servers stay until the next refresh. */

@@ -1,12 +1,5 @@
 <script lang="ts">
-  import {
-    LISTEN_CHOICES,
-    LISTEN_OTHER,
-    proxyOpen,
-    type FieldErrors,
-    type ProxyDraft,
-  } from '../../../lib/inbounds';
-  import Select from '../../ui/Select.svelte';
+  import { proxyOpen, type FieldErrors, type ProxyDraft } from '../../../lib/inbounds';
   import Switch from '../../ui/Switch.svelte';
   import TextField from '../../ui/TextField.svelte';
 
@@ -25,30 +18,19 @@
 
 <!-- Settings of a SOCKS5 and HTTP proxy inbound; InboundForm checks and sends them. -->
 <div class="fields">
-  <label class="label" for="{id}-listen">Accept from</label>
+  <label class="label" for="{id}-listen">IP address</label>
   <div class="control">
-    <Select
+    <TextField
       id="{id}-listen"
       size="sm"
+      class="mono"
+      placeholder="127.0.0.1"
+      title="127.0.0.1: only this computer. 0.0.0.0: the local network too."
       bind:value={draft.listen}
-      options={LISTEN_CHOICES}
+      invalid={errors.proxy_listen !== undefined}
       {disabled}
     />
   </div>
-  {#if draft.listen === LISTEN_OTHER}
-    <div class="control wide">
-      <TextField
-        size="sm"
-        class="mono"
-        placeholder="IP address of this computer"
-        aria-label="Address to listen on"
-        bind:value={draft.address}
-        invalid={errors.proxy_listen !== undefined}
-        {disabled}
-        autofocus
-      />
-    </div>
-  {/if}
   {#if errors.proxy_listen}
     <p class="invalid">{errors.proxy_listen}</p>
   {/if}
@@ -69,9 +51,12 @@
     <p class="invalid">{errors.proxy_port}</p>
   {/if}
 
-  <div class="wide auth">
+  <label class="label" for="{id}-auth">Require login</label>
+  <div class="control">
     <Switch
-      label="Require a login"
+      id="{id}-auth"
+      label="Require login"
+      hideLabel
       checked={draft.auth}
       {disabled}
       onchange={(checked) => (draft.auth = checked)}
@@ -115,7 +100,7 @@
 </div>
 
 <style>
-  /* Labels on the left, controls on the right; wide rows take both columns. */
+  /* Labels on the left, controls on the right; messages take both columns. */
   .fields {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
@@ -129,19 +114,24 @@
   }
 
   .control {
+    display: flex;
     min-width: 0;
   }
 
-  .wide,
+  .control > :global(*) {
+    flex: 1;
+  }
+
+  /* The switch keeps its size and starts where the fields do. */
+  .fields .control > :global(.switch) {
+    flex: none;
+    padding-left: 0;
+  }
+
   .invalid,
   .note {
     grid-column: 1 / -1;
     min-width: 0;
-  }
-
-  /* The switch text lines up with the labels. */
-  .auth > :global(button) {
-    margin-left: calc(-1 * var(--space-2));
   }
 
   .invalid {

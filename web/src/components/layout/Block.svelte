@@ -6,6 +6,8 @@
   interface Props {
     title: string;
     icon?: IconName;
+    /** Shown in place of the icon, e.g. the logo. */
+    lead?: Snippet;
     /** Position among all blocks when the zones collapse into fewer columns. */
     order: number;
     /** Short text after the title, e.g. a count. */
@@ -24,6 +26,7 @@
   let {
     title,
     icon,
+    lead,
     order,
     meta,
     hint,
@@ -38,7 +41,9 @@
 
 <section class="block" class:fill class:flush style:--block-order={order} aria-labelledby={id}>
   <header class="header">
-    {#if icon}
+    {#if lead}
+      {@render lead()}
+    {:else if icon}
       <span class="icon"><Icon name={icon} /></span>
     {/if}
     <h2 class="title" {id}>{title}</h2>

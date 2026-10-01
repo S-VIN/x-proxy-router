@@ -8,6 +8,7 @@
     stackLabel,
     yesNo,
   } from '../../../lib/format';
+  import { outboundTests } from '../../../lib/stores';
   import Icon from '../../ui/Icon.svelte';
   import Stat from '../../ui/Stat.svelte';
 
@@ -71,7 +72,11 @@
   // Results of the current tests, in their order.
   const results = $derived(
     tests
-      .map((test) => ({ alias: test.alias, passed: server.tests?.[test.alias] ?? null }))
+      .map((test) => ({
+        id: test.id,
+        label: outboundTests.label(test.id),
+        passed: server.tests?.[test.id] ?? null,
+      }))
       .filter((item) => item.passed !== null),
   );
 </script>
@@ -102,10 +107,10 @@
       <div class="tests">
         <span class="caption">Last test results</span>
         <ul class="results">
-          {#each results as item (item.alias)}
+          {#each results as item (item.id)}
             <li class="result" class:failed={!item.passed}>
               <Icon name={item.passed ? 'check' : 'close'} size={12} />
-              {item.alias}<span class="visually-hidden">: {item.passed ? 'passed' : 'failed'}</span>
+              {item.label}<span class="visually-hidden">: {item.passed ? 'passed' : 'failed'}</span>
             </li>
           {/each}
         </ul>

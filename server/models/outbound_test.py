@@ -1,8 +1,9 @@
 """An HTTP check that outbound servers must pass, configured in ServerSettings."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 
 class OutboundTestRule(StrEnum):
@@ -35,15 +36,20 @@ class OutboundTestRule(StrEnum):
 
 @dataclass(frozen=True, kw_only=True)
 class OutboundTest:
-    # Requested through each outbound server; not secret, clients edit it.
+    """Clients add and delete tests; a test cannot be changed.
+
+    Clients name a test after its URL's site, so it has no name of its own.
+    """
+
+    # Key of OutboundServer.tests.
+    id: str = field(default_factory=lambda: str(uuid4()))
+    # Requested through each outbound server; not secret. Unique among tests.
     url: str
-    # Unique within ServerSettings.outbound_tests; key of OutboundServer.tests.
-    alias: str
     rule: OutboundTestRule
 
     def __post_init__(self):
+        if not self.id:
+            raise ValueError("Outbound test id must not be empty")
         parts = urlsplit(self.url)
         if parts.scheme not in ("http", "https") or not parts.hostname:
             raise ValueError("Outbound test URL must be HTTP(S)")
-        if not self.alias.strip():
-            raise ValueError("Outbound test alias must not be empty")

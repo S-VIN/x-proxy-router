@@ -3,11 +3,11 @@ import type { InboundServer, InboundSettings, InboundType } from './api/protocol
 export interface InboundTypeInfo {
   type: InboundType;
   label: string;
-  /** What it is and how apps use it, shown when choosing the type. */
+  /** What it is and how apps use it, shown on its Add button. */
   description: string;
 }
 
-/** Types a new inbound can have, in the order they are offered. */
+/** Types a new inbound can have, each with its own Add button, in this order. */
 export const INBOUND_TYPES: readonly InboundTypeInfo[] = [
   {
     type: 'proxy',
@@ -48,21 +48,23 @@ export function inboundDetails(inbound: InboundServer): string {
   return parts.join(' · ');
 }
 
-/** Choice of the proxy form for an address typed by hand. */
-export const LISTEN_OTHER = 'other';
-
-export const LISTEN_CHOICES = [
-  { value: '127.0.0.1', label: 'This computer' },
-  { value: '0.0.0.0', label: 'Local network' },
-  { value: '::', label: 'Network, IPv6 too' },
-  { value: LISTEN_OTHER, label: 'Other address…' },
-] as const;
+/** An IPv4 address such as 127.0.0.1, or an IPv6 one such as ::. */
+export function isIpAddress(text: string): boolean {
+  if (!text.includes(':')) {
+    const octets = text.split('.');
+    return (
+      octets.length === 4 &&
+      octets.every((octet) => /^(0|[1-9]\d{0,2})$/.test(octet) && Number(octet) <= 255)
+    );
+  }
+  // URLs accept exactly the IPv6 addresses in brackets.
+  return !/[[\]/%]/.test(text) && URL.canParse(`http://[${text}]/`);
+}
 
 /** Values of the proxy form as typed. */
 export interface ProxyDraft {
-  /** A value of LISTEN_CHOICES; LISTEN_OTHER takes `address`. */
+  /** The IP address to listen on, e.g. 127.0.0.1 or 0.0.0.0. */
   listen: string;
-  address: string;
   port: string;
   auth: boolean;
   username: string;
@@ -82,11 +84,8 @@ export function proxyDraft(
   inbound: InboundServer | null,
   inbounds: readonly InboundServer[],
 ): ProxyDraft {
-  const listen = inbound?.proxy_listen ?? '127.0.0.1';
-  const preset = LISTEN_CHOICES.some((choice) => choice.value === listen);
   return {
-    listen: preset ? listen : LISTEN_OTHER,
-    address: preset ? '' : listen,
+    listen: inbound?.proxy_listen ?? '127.0.0.1',
     port: String(inbound?.proxy_port ?? freePort(inbounds)),
     auth: inbound?.proxy_username != null,
     username: inbound?.proxy_username ?? '',
@@ -96,7 +95,7 @@ export function proxyDraft(
 
 /** The address the proxy listens on. */
 export function proxyListen(draft: ProxyDraft): string {
-  return draft.listen === LISTEN_OTHER ? draft.address.trim() : draft.listen;
+  return draft.listen.trim();
 }
 
 /** Whole numbers 1–65535, or null. */
@@ -107,14 +106,16 @@ function parsePort(text: string): number | null {
   return port >= 1 && port <= 65535 ? port : null;
 }
 
-/** Problems the server would reject; it checks the address and free ports itself. */
+/** Problems the server would reject; it checks that the address and the port are free itself. */
 export function proxyErrors(
   draft: ProxyDraft,
   inbound: InboundServer | null,
   inbounds: readonly InboundServer[],
 ): FieldErrors {
   const errors: FieldErrors = {};
-  if (!proxyListen(draft)) errors.proxy_listen = 'Enter an IP address.';
+  const listen = proxyListen(draft);
+  if (!listen) errors.proxy_listen = 'Enter an IP address.';
+  else if (!isIpAddress(listen)) errors.proxy_listen = 'Enter an IP address, e.g. 127.0.0.1.';
   const port = parsePort(draft.port);
   if (port === null) {
     errors.proxy_port = 'Enter a port from 1 to 65535.';
@@ -153,12 +154,12 @@ export function proxySettings(draft: ProxyDraft, inbound: InboundServer | null):
 /** The proxy accepts connections from the network without a login. */
 export function proxyOpen(draft: ProxyDraft): boolean {
   const listen = proxyListen(draft);
-  return !draft.auth && listen !== '' && !LOOPBACK.test(listen);
+  return !draft.auth && isIpAddress(listen) && !LOOPBACK.test(listen);
 }
 
 /**
  * Form values of one inbound type. A new type adds a member here, cases to the
- * functions below and its fields component to InboundForm.
+ * functions below, its fields component to InboundForm and itself to INBOUND_TYPES.
  */
 export type InboundDraft = { type: 'proxy'; proxy: ProxyDraft };
 
