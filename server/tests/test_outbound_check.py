@@ -534,14 +534,14 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.context.settings.outbound_server.update_health(
             no_ping.id, ping=None, speed=None, rating=0, tests={}, filtered=FilterReason.BY_PING
         )
-        self.context.settings.reg_filter.add(RegFilter(reg="^RU 1$"))
+        self.context.settings.reg_filter.add(RegFilter(reg="RU 1"))
         checked = []
 
         async def connect(server_id):
             checked.append(server_id)
             if server_id == no_ping.id:
                 # A filter added during the run applies to the servers not checked yet.
-                self.context.settings.reg_filter.add(RegFilter(reg="^RU"))
+                self.context.settings.reg_filter.add(RegFilter(reg="RU*"))
 
         self.core.test_connect.side_effect = connect
         await handler.test_outbound_servers(self.context)
@@ -647,7 +647,7 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_run_passes_the_checked_servers_to_auto_connect(self):
         first, broken, filtered = self.saved(vless(1)), self.saved(vless(2)), self.saved(vless(3))
-        self.context.settings.reg_filter.add(RegFilter(reg=f"^{filtered.name}$"))
+        self.context.settings.reg_filter.add(RegFilter(reg=filtered.name))
 
         async def connect(server_id):
             if server_id == broken.id:

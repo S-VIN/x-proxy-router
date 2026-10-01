@@ -15,8 +15,10 @@ from .outbound_server import (
     XhttpMode,
 )
 from .outbound_test import OutboundTest, OutboundTestRule
+from .pattern import pattern_matches
 from .platform import Architecture, OperatingSystem
 from .reg_filter import RegFilter
+from .routing_rule import RoutingAction, RoutingRule, RoutingRuleFieldError
 from .serialization import SECRET, JsonValue, serialize
 from .server_settings import ServerSettings
 from .subscription_link import SubscriptionLink
@@ -42,6 +44,9 @@ __all__ = [
     "OutboundTestRule",
     "OutboundTransport",
     "RegFilter",
+    "RoutingAction",
+    "RoutingRule",
+    "RoutingRuleFieldError",
     "ServerSettings",
     "ShadowsocksMethod",
     "SubscriptionLink",
@@ -50,5 +55,6 @@ __all__ = [
     "UotVersion",
     "VlessFlow",
     "XhttpMode",
+    "pattern_matches",
     "serialize",
 ]

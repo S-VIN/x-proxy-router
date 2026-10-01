@@ -98,7 +98,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         self.client = Client(self.context.websocket)
         # Skip the initial snapshots.
         async with asyncio.timeout(2):
-            while len(self.client.frames) < 6:
+            while len(self.client.frames) < 7:
                 self.client.received.clear()
                 await self.client.received.wait()
         await startup_finished(self.context)
@@ -406,7 +406,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
     async def test_connect_to_a_filtered_server_conflicts(self):
         first, second = await self.check_servers()
         await self.client.request("request", "connect_outbound_server", {"id": first.id})
-        self.context.settings.reg_filter.add(RegFilter(reg="^two$"))
+        self.context.settings.reg_filter.add(RegFilter(reg="two"))
         error = await self.client.error("request", "connect_outbound_server", {"id": second.id})
         self.assertEqual(
             error,
@@ -421,7 +421,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
     async def test_reg_filter_lifecycle(self):
         _, second = await self.check_servers()
         servers = self.context.settings.outbound_server
-        updates, response = await self.client.request("add", "reg_filter", {"reg": "^two$"})
+        updates, response = await self.client.request("add", "reg_filter", {"reg": "two"})
         filter_id = response["payload"]["id"]
         self.assertEqual(
             (response["model"], response["ok"], response["payload"]),
@@ -434,7 +434,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [(update["model"], update["payload"]) for update in updates],
             [
-                ("reg_filter", [{"id": filter_id, "reg": "^two$"}]),
+                ("reg_filter", [{"id": filter_id, "reg": "two"}]),
                 ("outbound_server", [serialize(servers.get_by_id(second.id))]),
             ],
         )
@@ -453,7 +453,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
     async def test_filter_on_the_connected_server_disconnects_it(self):
         first, _ = await self.check_servers()
         await self.client.request("request", "connect_outbound_server", {"id": first.id})
-        updates, response = await self.client.request("add", "reg_filter", {"reg": "^one$"})
+        updates, response = await self.client.request("add", "reg_filter", {"reg": "one"})
         self.assertTrue(response["ok"])
         # The mode was off, so only the server changes: filtered and disconnected at once.
         self.assertEqual([update["model"] for update in updates], ["reg_filter", "outbound_server"])
@@ -479,12 +479,11 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.context.settings.outbound_server.get_connected())
 
     async def test_reg_filter_errors(self):
-        existing = RegFilter(reg="^RU")
+        existing = RegFilter(reg="RU*")
         self.context.settings.reg_filter.add(existing)
         cases = [
-            ("add", {"reg": "^RU"}, "conflict", {"field": "reg"}),
+            ("add", {"reg": "RU*"}, "conflict", {"field": "reg"}),
             ("add", {"reg": ""}, "validation_error", {"field": "reg"}),
-            ("add", {"reg": "("}, "validation_error", {"field": "reg"}),
             ("add", {"reg": 1}, "bad_request", {"field": "reg"}),
             ("add", {}, "bad_request", {"field": "reg"}),
             ("add", {"reg": "NL", "id": "mine"}, "bad_request", {"field": "id"}),
@@ -684,7 +683,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([update["model"] for update in updates], ["server_settings"])
         # A filter on the connected server disconnects it and turns the mode off.
         await self.client.request("change", "server_settings", {"id": 0, "auto_connect": True})
-        updates, _ = await self.client.request("add", "reg_filter", {"reg": "^two$"})
+        updates, _ = await self.client.request("add", "reg_filter", {"reg": "two"})
         self.assertEqual(
             [update["model"] for update in updates],
             ["reg_filter", "server_settings", "outbound_server"],

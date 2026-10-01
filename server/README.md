@@ -18,7 +18,10 @@ uv run python -m server.main
 создаётся один `MihomoClient`, запускается планировщик. Затем, до того как
 приложение готово к работе, запускается ядро:
 `service_start(TEST_PORT)` — только тестовый SOCKS5 на `127.0.0.1:20809`
-(константа в `main.py`). Затем `handlers/inbound_server.py`,
+(константа в `main.py`). Затем `handlers/routing_rule.py`,
+`apply_routing_rules(context)` передаёт ядру правила роутинга из БД (раздел
+«Роутинг»), чтобы трафик inbound с первой секунды шёл по ним; ошибка здесь, как и
+незапустившееся ядро, останавливает запуск. Затем `handlers/inbound_server.py`,
 `start_inbound_servers(context)` запускает включённые inbound из БД (раздел «Inbound»):
 при первом запуске это созданный вместе с таблицей прокси на `127.0.0.1:20808`.
 Inbound, который не запустился (например, порт занят), получает `error`, остальные
@@ -86,6 +89,9 @@ Inbound, который не запустился (например, порт з
 | `handlers/auto_connect.py` | Алгоритм режима `auto_connect` и его состояние `AutoConnectState` (`context.auto_connect`) |
 | `handlers/inbound_server.py` | Запросы `add`/`change`/`delete` для `inbound_server` и запуск inbound при старте, `start_inbound_servers` |
 | `models/inbound_server.py` | Модель `InboundServer`, типы `InboundType`, порт inbound по умолчанию `DEFAULT_PROXY_PORT` |
+| `handlers/routing_rule.py` | Запросы `add`/`change`/`delete` для `routing_rule` и передача правил ядру при старте, `apply_routing_rules` |
+| `models/routing_rule.py` | Модель `RoutingRule`, действия `RoutingAction`, перенумерация `placed` и `without` |
+| `models/pattern.py` | Упрощённые шаблоны фильтров и правил роутинга: `pattern_matches` |
 | `handlers/` | Обычные async-функции, которые можно вызывать независимо от расписания |
 
 Хендлер получает `ApplicationContext`: `settings`, `core_client`, `scheduler`,
@@ -230,7 +236,7 @@ context.scheduler.remove_job("my-job")
 ```
 
 - `model` — имя коллекции: `server_settings`, `subscription_link`, `reg_filter`,
-  `outbound_server`, `inbound_server`, `task` (в этом порядке приходят снимки при подключении). `server_settings` —
+  `outbound_server`, `inbound_server`, `routing_rule`, `task` (в этом порядке приходят снимки при подключении). `server_settings` —
   коллекция из одного объекта с `id: 0`. `task` — долгие задачи сервера
   (раздел «Долгие задачи»).
 - `payload` — объекты целиком, как их возвращает `serialize()`.
@@ -291,7 +297,7 @@ password: str | None = field(default=None, repr=False, metadata=SECRET)
 
 - **Изменение модели** — `type` равен `add`, `change` или `delete`, в `model`
   имя изменяемой модели (`subscription_link`, `reg_filter`, `server_settings`,
-  `inbound_server`).
+  `inbound_server`, `routing_rule`).
 - **Действие** — `type` всегда `request`, а само действие записано в `model`,
   например `refresh_subscriptions`. Новые действия, которые не сводятся
   к добавлению, изменению или удалению одной модели, добавляются только так,
@@ -331,6 +337,9 @@ password: str | None = field(default=None, repr=False, metadata=SECRET)
 | `delete` | `subscription_link` | `{id}` | `{}` |
 | `add` | `reg_filter` | `{reg}` | `{id}` |
 | `delete` | `reg_filter` | `{id}` | `{}` |
+| `add` | `routing_rule` | `{reg, action, priority?}` | `{id}` после передачи правил ядру |
+| `change` | `routing_rule` | `{id, priority?, reg?, action?}` | `{}` после передачи правил ядру |
+| `delete` | `routing_rule` | `{id}` | `{}` после передачи правил ядру |
 | `change` | `server_settings` | `{id: 0, subscription_refresh_interval?, outbound_tests?, auto_connect?}` | `{}` |
 | `request` | `refresh_subscriptions` | `{}` | `{}` после загрузки всех подписок |
 | `request` | `test_outbound_servers` | `{}` | `{}` после проверки всех серверов |
@@ -369,7 +378,7 @@ password: str | None = field(default=None, repr=False, metadata=SECRET)
 «Фильтрация серверов»). Если под новый фильтр попал подключённый сервер, он
 отключается и `auto_connect` выключается: между ними приходит `server_settings`,
 если режим был включён, а в `outbound_server` у сервера сразу `is_connected: false`.
-Неверное выражение — `validation_error`, такое же уже
+Пустой шаблон — `validation_error`, такой же уже
 есть — `conflict`, оба с `details.field = "reg"`. Изменения фильтра нет.
 
 `add` / `subscription_link` сначала дожидается идущего обновления (оно прочитало
@@ -592,9 +601,10 @@ Inbound — порт, на котором ядро принимает трафи
   без `:`, оба непустые. Пароль помечен `SECRET`: его нет в repr и у клиентов;
 - `error: str | None` — почему ядро не слушает порт, ведёт сервер.
 
-Трафик всех inbound идёт основным маршрутом ядра: через сервер с `is_connected`,
-а пока ничего не подключено, блокируется. Тестовый порт проверок inbound не является
-и в модели не хранится.
+Трафик всех inbound идёт по правилам роутинга (раздел «Роутинг»), а не подошедший
+ни под одно — основным маршрутом ядра: через сервер с `is_connected`, а пока ничего
+не подключено, блокируется. Тестовый порт проверок inbound не является, в модели
+не хранится, и правила роутинга к нему не применяются.
 
 `handlers/inbound_server.py`:
 
@@ -611,6 +621,70 @@ Inbound — порт, на котором ядро принимает трафи
   становится `conflict`, с `proxy_listen` — `validation_error`, остальные ошибки
   ядра — `core_error`. Успешный `change` очищает `error`.
 
+## Роутинг
+
+Правило роутинга решает, куда идёт трафик inbound к адресу: через сервер, напрямую
+или никуда. Модель `RoutingRule` (`server/models/routing_rule.py`, неизменяемая):
+
+- `id: str` — строковый UUID;
+- `priority: int` — порядок проверки, 1 — первым; у правил коллекции номера 1..N
+  без пропусков;
+- `reg: str` — шаблон адреса назначения (раздел «Шаблоны»);
+- `action: RoutingAction` — `PROXY` (`"proxy"`, через подключённый сервер; пока
+  ничего не подключено — блокируется), `DIRECT` (`"direct"`, напрямую с этого
+  компьютера), `BLOCK` (`"block"`, соединение сразу закрывается).
+
+Срабатывает первое подходящее правило. Трафик, не подошедший ни под одно, идёт как
+`PROXY`; это не настраивается. Ошибка значения — `RoutingRuleFieldError`
+(наследник `ValueError`) с полем `field`.
+
+`reg` сравнивается с адресом назначения так, как его передало приложение:
+
+| Вид | Пример | Что можно |
+| --- | --- | --- |
+| домен | `youtube.com`, `*.youtube.com`, `*google*` | латинские буквы, цифры, `-`, `_`, `.`, `*` |
+| IPv4 | `192.168.1.10`, `192.168.*`, `10.*` | точный адрес или первые целые октеты и `*` в конце |
+| IPv6 | `::1` | только точный адрес |
+| всё | `*` | любой домен и любой IP |
+
+Шаблон из цифр, точек и `*`, в котором есть цифра, — IPv4: доменов с числовым
+последним уровнем нет. `192.16*`, `192.*.1.1`, `*.1` отклоняются: ядро сравнивает IP
+по подсетям. Доменный шаблон не подходит под IP-адрес, IP-шаблон — под домен:
+домены для правил не разрешаются. Конструктор приводит `reg` к нижнему регистру,
+`**` — к `*`, IPv6 — к сокращённой форме; свойство `network` даёт подсеть
+IP-шаблона (`None` для доменного и `*`).
+
+`placed(rules, rule)` возвращает правила с `rule` на его `priority`: правило с тем
+же `id` переносится, остальные сохраняют порядок и нумеруются заново; `priority`
+дальше, чем на одно за последним, — `RoutingRuleFieldError`. `without(rules, id)` —
+правила без этого и с перенумерацией. Их используют хендлеры и хранилище.
+
+`handlers/routing_rule.py`:
+
+- `apply_routing_rules(context)` — при старте приложения, после `service_start` и до
+  inbound: `core_client.routing_set` с правилами из БД. Правила проверены при
+  сохранении, поэтому ошибка здесь — ошибка ядра, и приложение не запускается.
+- `add_routing_rule`, `change_routing_rule`, `delete_routing_rule` — запросы
+  клиентов (PROTOCOL.md, `routing_rule`). Под `core_lock` хендлер собирает новый
+  список (`placed`, `without`), отдаёт его ядру `routing_set` и только потом пишет в
+  БД. Если ядро не смогло, БД не меняется, ядро оставляет прежние правила, клиент
+  получает `core_error`. Такой же `reg` у другого правила — `conflict`. `change`
+  без изменений ядро не трогает.
+
+## Шаблоны
+
+`server/models/pattern.py` — один синтаксис для фильтров серверов (`reg_filter.reg`)
+и правил роутинга (`routing_rule.reg`): `*` — любые символы, в том числе ни одного,
+остальные символы означают сами себя (`.` — точка), регистр не учитывается, шаблон
+сравнивается со всей строкой. `*RU*` находит `🇷🇺 RU Moscow`, `RU` — только имя `RU`;
+`*.youtube.com` — поддомены, но не сам `youtube.com`.
+
+`pattern_matches(pattern, text)` сравнивает в Python (фильтры серверов). Части между
+`*` ищутся по первому вхождению, что оставляет больше всего места следующим, поэтому
+сравнение не перебирает варианты и не зависает на шаблонах с многими `*`. Правила
+роутинга сравнивает ядро; `MihomoClient` переводит шаблон в его формат (раздел
+«Клиент приложения»).
+
 ## Фильтрация серверов
 
 `OutboundServer.filtered: FilterReason | None` — почему сервер отфильтрован:
@@ -619,10 +693,12 @@ Inbound — порт, на котором ядро принимает трафи
 пропускают, кроме `BY_PING`.
 
 - **`BY_REG_FILTER`** не хранится. `RegFilter(id, reg)` лежат в таблице
-  `reg_filters` (`context.settings.reg_filter`: `get_all`, `add`, `delete`).
-  `OutboundServerStore` при каждом чтении (`get_all`, `get_by_id`, `get_connected`,
-  результаты `set_connected` и `update_health`) ищет `reg` в `name` через
-  `re.search` и ставит `BY_REG_FILTER`, если подошёл хоть один фильтр. Поэтому
+  `reg_filters` (`context.settings.reg_filter`: `get_all`, `add`, `delete`);
+  `reg` — непустой шаблон (раздел «Шаблоны»), в нём допустимы любые символы, как в
+  именах серверов. `OutboundServerStore` при каждом чтении (`get_all`, `get_by_id`,
+  `get_connected`, результаты `set_connected` и `update_health`) сравнивает `name`
+  с шаблоном (`RegFilter.matches`) и ставит `BY_REG_FILTER`, если подошёл хоть
+  один фильтр. Поэтому
   после изменения фильтров серверы не переписываются: хендлер только вызывает
   `notify("outbound_server")`, и клиенты получают серверы с изменившимся `filtered`.
   Новые серверы из подписок фильтруются так же. `save()` сервера с
@@ -755,7 +831,7 @@ await context.tasks.cancel_all()  # при остановке приложени
 генерирует секрет. JSON хранится во временной папке ОС и удаляется при `stop()`
 или ошибке создания процесса. Listener, серверы и правила `MihomoClient` задаёт
 целиком через REST, поэтому после нового запуска приложение восстанавливает
-inbound и серверы заново.
+правила роутинга, inbound и серверы заново.
 
 ## REST-клиент
 
@@ -1040,6 +1116,15 @@ with SettingsStore() as settings:
 `bool`, `set_error(id, error)` — только поле `error`. Пароль хранится в БД открытым
 текстом, как адреса подписок.
 
+`settings.routing_rule` (`RoutingRuleStore`) хранит `RoutingRule` в таблице
+`routing_rules` (`id`, `priority`, `reg`, `action`, где `priority` и `reg`
+уникальны). `get_all()` — по возрастанию `priority`, `get_by_id(id)`;
+`save(rule)` добавляет или меняет правило и ставит его на `rule.priority`, остальные
+сдвигаются, как в `placed` (слишком большой `priority` — `RoutingRuleFieldError`,
+`reg` другого правила — `sqlite3.IntegrityError`); `delete(id)` → `bool`, правила
+после удалённого поднимаются. Правил немного, поэтому изменение переписывает все
+строки в одной транзакции и не проходит через временные повторы `priority`.
+
 Каждый геттер читает актуальные данные из БД и создаёт модельные структуры.
 Запись и удаление выполняются в транзакции БД; при ошибке изменения откатываются.
 Одинаковый URL у разных ID запрещён: `subscription_link.save` вызывает
@@ -1266,11 +1351,14 @@ TLS поверх SOCKS-туннеля поднимает сам `outbound_probe`
 
 ```python
 from server.cores.mihomo.mihomo_client import MihomoClient
-from server.models import InboundServer, InboundType
+from server.models import InboundServer, InboundType, RoutingAction, RoutingRule
 
 client = MihomoClient()
 await client.service_start(test_port=1081)
 try:
+    await client.routing_set(
+        [RoutingRule(priority=1, reg="192.168.*", action=RoutingAction.DIRECT)]
+    )
     await client.inbound_set(InboundServer(type=InboundType.PROXY, proxy_port=1080))
     await client.outbound_register([selected_server, candidate_server, another_server])
     await client.outbound_connect(selected_server.id)
@@ -1295,16 +1383,32 @@ finally:
 - `check_inbound_config(inbound)` — синхронная проверка, что ядро соберёт listener
   (`ValueError` для неподдерживаемого типа), без сети и запущенного ядра.
 - `inbound_set(inbound)` запускает listener inbound или заменяет запущенный с тем же
-  `id`; его трафик идёт основным маршрутом. Серверы и оба маршрута сохраняются.
+  `id`; его трафик идёт по правилам роутинга, остальное — основным маршрутом.
+  Серверы, правила и оба маршрута сохраняются.
   Перед применением клиент проверяет `bind` нового порта (или нового адреса на
   свободном порту, если порт тот же), после — SOCKS5-рукопожатием, что listener
   отвечает. Неудача — `InboundError` с текстом для клиента и полем `field`
   (`proxy_port` или `proxy_listen`); прежний listener с этим `id` остаётся.
   Тот же inbound повторно ничего не меняет. `inbound_delete(id)` останавливает
   listener, неизвестный `id` игнорируется. `service_stop` закрывает все.
+- `routing_set(rules)` заменяет все правила роутинга; срабатывает первое по
+  `priority`. Серверы, inbound и оба маршрута сохраняются; открытые соединения
+  остаются на своём пути, новые идут по новым правилам. При ошибке ядро оставляет
+  прежние правила. Тестовый SOCKS5 правила не учитывает.
 - Mihomo принимает конфиг только целиком, поэтому `MihomoClient` помнит
-  зарегистрированные серверы, inbound и выбранные в группах серверы. Каждый inbound —
-  listener `mixed` с именем `id` и правило `IN-NAME,<id>,main`. Выбранный сервер
+  зарегистрированные серверы, inbound, правила роутинга и выбранные в группах
+  серверы. Каждый inbound — listener `mixed` с именем `id` и правило
+  `IN-NAME,<id>,main`. Правила идут в порядке: `IN-NAME,test,test`, правила роутинга
+  по `priority`, `IN-NAME` inbound, `MATCH,REJECT` (`routing_rule_config`):
+  - доменный шаблон → `DOMAIN-REGEX` по всему домену (`domain_regex`): точки
+    экранируются, `*` между частями — атомарная группа `(?>.*?часть)`, чтобы
+    движок regexp2 не перебирал варианты; регистр Mihomo не учитывает сам;
+  - IP-шаблон → `IP-CIDR` / `IP-CIDR6` подсети с `no-resolve`: без него Mihomo
+    разрешал бы каждый домен, чтобы сравнить его адрес, и DNS-запросы проксируемых
+    доменов уходили бы с этого компьютера. Имена из hosts-файла системы
+    (`localhost`) Mihomo подставляет сам, без DNS, и под IP-правила они попадают;
+  - `*` → `MATCH`: доменный `^.*$` подошёл бы и к IP-адресу, у которого домен пустой;
+  - `proxy` → группа `main`, `direct` → `DIRECT`, `block` → `REJECT`. Выбранный сервер
   стоит в группе первым, поэтому новый конфиг не сбивает маршруты; listener с
   неизменным конфигом Mihomo не перезапускает, соединения через него не рвутся.
   Listener, который Mihomo не смог открыть, он только пишет в лог, поэтому после
@@ -1332,5 +1436,5 @@ finally:
   параметры URI в `extra_params` сохраняются в модели, но не интерпретируются.
 
 Локальные тесты проверяют SOCKS-handshake, независимость маршрутов, inbound,
-смену серверов и преобразование VLESS/Shadowsocks/Hysteria 2, а также
-TCP/WS/gRPC/XHTTP. Доступность реальных серверов подписок эти тесты не проверяют.
+правила роутинга, смену серверов и преобразование VLESS/Shadowsocks/Hysteria 2,
+а также TCP/WS/gRPC/XHTTP. Доступность реальных серверов подписок эти тесты не проверяют.

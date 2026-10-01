@@ -26,6 +26,7 @@ from .models.outbound_server import (
 )
 from .models.outbound_test import OutboundTest, OutboundTestRule
 from .models.reg_filter import RegFilter
+from .models.routing_rule import RoutingAction, RoutingRule, placed, without
 from .models.serialization import serialize
 from .models.server_settings import ServerSettings
 from .models.subscription_link import SubscriptionLink
@@ -273,6 +274,68 @@ class InboundServerStore:
                 "DELETE FROM inbound_servers WHERE id = ?", (inbound_id,)
             )
         return cursor.rowcount > 0
+
+
+class RoutingRuleStore:
+    """Routing rules numbered 1..N by priority, sharing the connection owned by SettingsStore.
+
+    Changes renumber the rules the way models.routing_rule.placed and without do.
+    """
+
+    def __init__(self, connection: sqlite3.Connection):
+        self._connection = connection
+        with self._connection:
+            self._connection.execute(
+                "CREATE TABLE IF NOT EXISTS routing_rules ("
+                "id TEXT PRIMARY KEY NOT NULL, "
+                "priority INTEGER NOT NULL UNIQUE, "
+                "reg TEXT NOT NULL UNIQUE, "
+                "action TEXT NOT NULL)"
+            )
+
+    def _read(self, query: str, parameters: tuple[str, ...] = ()) -> list[RoutingRule]:
+        return [
+            RoutingRule(id=id_, priority=priority, reg=reg, action=RoutingAction(action))
+            for id_, priority, reg, action in self._connection.execute(query, parameters)
+        ]
+
+    def get_all(self) -> list[RoutingRule]:
+        """Return a snapshot of all rules by priority."""
+        return self._read("SELECT id, priority, reg, action FROM routing_rules ORDER BY priority")
+
+    def get_by_id(self, rule_id: str) -> RoutingRule | None:
+        rules = self._read(
+            "SELECT id, priority, reg, action FROM routing_rules WHERE id = ?", (rule_id,)
+        )
+        return rules[0] if rules else None
+
+    def save(self, rule: RoutingRule) -> None:
+        """Insert a rule or update it by id, putting it at its priority.
+
+        The other rules move to keep 1..N; a priority more than one past the
+        last rule raises RoutingRuleFieldError, a pattern of another rule
+        sqlite3.IntegrityError.
+        """
+        with self._connection:
+            self._write_all(placed(self.get_all(), rule))
+
+    def delete(self, rule_id: str) -> bool:
+        """Delete a rule by id, moving the rules after it up; return False if it did not exist."""
+        with self._connection:
+            rules = self.get_all()
+            remaining = without(rules, rule_id)
+            if len(remaining) == len(rules):
+                return False
+            self._write_all(remaining)
+        return True
+
+    def _write_all(self, rules: list[RoutingRule]) -> None:
+        # Rewriting the few rules avoids transient duplicates of the unique priorities.
+        self._connection.execute("DELETE FROM routing_rules")
+        self._connection.executemany(
+            "INSERT INTO routing_rules (id, priority, reg, action) VALUES (?, ?, ?, ?)",
+            [(rule.id, rule.priority, rule.reg, rule.action.value) for rule in rules],
+        )
 
 
 def _server_key(server: OutboundServer) -> str:
@@ -573,6 +636,7 @@ class SettingsStore:
     reg_filter: RegFilterStore
     outbound_server: OutboundServerStore
     inbound_server: InboundServerStore
+    routing_rule: RoutingRuleStore
 
     def __new__(cls) -> Self:
         if cls._instance is None:
@@ -587,6 +651,7 @@ class SettingsStore:
                     instance._connection, instance.reg_filter
                 )
                 instance.inbound_server = InboundServerStore(instance._connection)
+                instance.routing_rule = RoutingRuleStore(instance._connection)
             except Exception:
                 instance._connection.close()
                 raise

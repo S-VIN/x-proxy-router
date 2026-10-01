@@ -81,18 +81,19 @@ class OutboundServerTests(unittest.TestCase):
 
 
 class RegFilterTests(unittest.TestCase):
-    def test_found_anywhere_in_the_name_and_case_sensitive(self):
-        reg_filter = RegFilter(reg="RU|Россия")
+    def test_pattern_matches_the_whole_name_ignoring_case(self):
+        reg_filter = RegFilter(reg="*RU*")
         self.assertTrue(reg_filter.matches("🇷🇺 RU Moscow"))
-        self.assertTrue(reg_filter.matches("Россия 2"))
-        self.assertFalse(reg_filter.matches("Peru"))
-        self.assertTrue(RegFilter(reg="(?i)ru").matches("Peru"))
-        self.assertFalse(RegFilter(reg="^NL$").matches("NL 2"))
+        self.assertTrue(reg_filter.matches("Peru"))
+        self.assertTrue(RegFilter(reg="россия*").matches("Россия 2"))
+        self.assertFalse(RegFilter(reg="NL").matches("NL 2"))
+        # Regular expression syntax is plain text.
+        self.assertTrue(RegFilter(reg="(?i)[a-]").matches("(?I)[A-]"))
+        self.assertFalse(RegFilter(reg="N.").matches("NL"))
 
     def test_invalid_filters_are_rejected(self):
-        for reg in ("", "(", "[a-"):
-            with self.subTest(reg=reg), self.assertRaises(ValueError):
-                RegFilter(reg=reg)
+        with self.assertRaises(ValueError):
+            RegFilter(reg="")
         with self.assertRaises(ValueError):
             RegFilter(reg="RU", id="")
 
@@ -326,6 +327,7 @@ class ApplicationSyncTests(unittest.IsolatedAsyncioTestCase):
                     ("reg_filter", True, []),
                     ("outbound_server", True, []),
                     ("inbound_server", True, [serialize(inbound)]),
+                    ("routing_rule", True, []),
                     (
                         "task",
                         True,

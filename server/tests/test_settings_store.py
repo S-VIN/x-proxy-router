@@ -66,13 +66,13 @@ class SettingsStoreTests(unittest.TestCase):
     def test_reg_filters_are_unique_and_kept_in_order(self):
         filters = self.store.reg_filter
         self.assertEqual(filters.get_all(), [])
-        first, second = RegFilter(reg="^RU"), RegFilter(reg="(?i)test")
+        first, second = RegFilter(reg="RU*"), RegFilter(reg="*test*")
         filters.add(first)
         filters.add(second)
         self.assertEqual(filters.get_all(), [first, second])
-        # The same expression under another id is rejected.
+        # The same pattern under another id is rejected.
         with self.assertRaises(sqlite3.IntegrityError):
-            filters.add(RegFilter(reg="^RU"))
+            filters.add(RegFilter(reg="RU*"))
         self.assertTrue(filters.delete(first.id))
         self.assertFalse(filters.delete(first.id))
         self.store.close()
@@ -491,7 +491,7 @@ class OutboundSettingsTests(unittest.TestCase):
     def test_reg_filters_apply_on_every_read_and_are_not_stored(self):
         ru, nl = self.server(name="RU 1"), self.server(name="NL 1")
         self.servers.add_servers([ru, nl])
-        reg_filter = RegFilter(reg="^RU")
+        reg_filter = RegFilter(reg="RU*")
         self.store.reg_filter.add(reg_filter)
         self.assertEqual(
             [server.filtered for server in self.servers.get_all()],
@@ -519,7 +519,7 @@ class OutboundSettingsTests(unittest.TestCase):
         self.servers.update_servers([self.server(name="RU 1", path="/new")])
         self.assertEqual(self.servers.get_all(), [replace(failed, path="/new")])
         # A filter takes precedence over the stored reason and hides it until deleted.
-        reg_filter = RegFilter(reg="RU")
+        reg_filter = RegFilter(reg="RU *")
         self.store.reg_filter.add(reg_filter)
         stored = self.servers.get_by_id(server.id)
         assert stored is not None

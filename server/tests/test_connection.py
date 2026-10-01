@@ -101,7 +101,7 @@ class ConnectionTests(ConnectionTestCase):
 
     async def test_filtered_servers_cannot_be_connected(self):
         await connect_outbound_server(self.context, self.first.id)
-        self.context.settings.reg_filter.add(RegFilter(reg="^two$"))
+        self.context.settings.reg_filter.add(RegFilter(reg="two"))
         self.store.update_health(
             self.first.id, ping=None, speed=None, rating=0, tests={}, filtered=FilterReason.BY_PING
         )
@@ -117,7 +117,7 @@ class ConnectionTests(ConnectionTestCase):
         settings = self.context.settings.server_settings
         await connect_outbound_server(self.context, self.first.id)
         # Filters on other servers and filtering by ping keep the connection.
-        self.context.settings.reg_filter.add(RegFilter(reg="^two$"))
+        self.context.settings.reg_filter.add(RegFilter(reg="two"))
         self.store.update_health(
             self.first.id, ping=None, speed=None, rating=0, tests={}, filtered=FilterReason.BY_PING
         )
@@ -131,7 +131,7 @@ class ConnectionTests(ConnectionTestCase):
         client = Client(self.context.websocket)
         await client.messages()
         # A filter on its name disconnects it and turns auto_connect off.
-        self.context.settings.reg_filter.add(RegFilter(reg="^one$"))
+        self.context.settings.reg_filter.add(RegFilter(reg="one"))
         await disconnect_filtered_server(self.context)
         self.core.outbound_disconnect.assert_awaited_once_with()
         self.assertIsNone(self.store.get_connected())
@@ -146,7 +146,7 @@ class ConnectionTests(ConnectionTestCase):
 
     async def test_filtered_server_is_marked_disconnected_when_the_core_fails(self):
         await connect_outbound_server(self.context, self.first.id)
-        self.context.settings.reg_filter.add(RegFilter(reg="^one$"))
+        self.context.settings.reg_filter.add(RegFilter(reg="one"))
         self.core.outbound_disconnect.side_effect = RuntimeError("down")
         with self.assertLogs("server.handlers.core", level="ERROR"):
             await disconnect_filtered_server(self.context)

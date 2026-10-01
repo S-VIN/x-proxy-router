@@ -119,7 +119,7 @@ class InboundServerRequestTests(unittest.IsolatedAsyncioTestCase):
         configure_handlers(self.context)
         self.client = Client(self.context.websocket)
         async with asyncio.timeout(2):
-            while len(self.client.frames) < 6:
+            while len(self.client.frames) < 7:
                 self.client.received.clear()
                 await self.client.received.wait()
         await startup_finished(self.context)

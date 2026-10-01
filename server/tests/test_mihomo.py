@@ -19,6 +19,8 @@ from server.models import (
     OutboundSecurity,
     OutboundServer,
     OutboundTransport,
+    RoutingAction,
+    RoutingRule,
     ShadowsocksMethod,
 )
 
@@ -137,6 +139,9 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await c.test_connect(second.id)
             await c.test_stop()
             await c.inbound_set(inbound())
+            await c.routing_set(
+                [RoutingRule(priority=1, reg="*.example.com", action=RoutingAction.BLOCK)]
+            )
             await c.outbound_delete_all()
         self.assertFalse(hasattr(c.process_manager, "config"))
 
@@ -201,6 +206,52 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reply[:2], b"\x05\x00")
         await reader.readexactly(6 if reply[3] == 1 else 18)
         return reader, writer
+
+    async def echo(self, label):
+        """A plain TCP echo server on 127.0.0.1 that DIRECT traffic reaches; returns its port."""
+
+        async def handle(reader, writer):
+            self.writers.append(writer)
+            try:
+                while data := await reader.read(1024):
+                    writer.write(label + data)
+                    await writer.drain()
+            except ConnectionError:
+                pass
+            finally:
+                writer.close()
+
+        listener = await asyncio.start_server(handle, "127.0.0.1", 0)
+        self.listeners.append(listener)
+        return listener.sockets[0].getsockname()[1]
+
+    async def socks_to(self, port, host, destination_port):
+        """A SOCKS5 connection to a domain or an IPv4 address; Mihomo routes it after the reply."""
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        self.writers.append(writer)
+        writer.write(b"\x05\x01\x00")
+        await writer.drain()
+        self.assertEqual(await reader.readexactly(2), b"\x05\x00")
+        try:
+            address = b"\x01" + socket.inet_aton(host)
+        except OSError:
+            address = b"\x03" + bytes([len(host)]) + host.encode()
+        writer.write(b"\x05\x01\x00" + address + destination_port.to_bytes(2, "big"))
+        await writer.drain()
+        reply = await reader.readexactly(4)
+        self.assertEqual(reply[:2], b"\x05\x00")
+        await reader.readexactly(6 if reply[3] == 1 else 18)
+        return reader, writer
+
+    async def blocked(self, connection):
+        reader, writer = connection
+        try:
+            writer.write(b"ping")
+            await writer.drain()
+            async with asyncio.timeout(5):
+                self.assertEqual(await reader.read(1024), b"")
+        except ConnectionResetError:
+            pass
 
     async def ping(self, connection, label):
         reader, writer = connection
@@ -459,3 +510,67 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await task
         self.assertEqual(c.process_manager.status().state, CoreState.FAILED)
         self.assertIsNone(c.process_manager.status().pid)
+
+    async def test_routing_rules(self):
+        c = self.client
+        server = await self.echo_vless(b"main:")
+        direct = await self.echo(b"direct:")
+        with self.assertRaises(RuntimeError):
+            await c.routing_set([])
+        await c.service_start(free_port())
+        listener = inbound()
+        await c.inbound_set(listener)
+        await c.outbound_register([server])
+        await c.outbound_connect(server.id)
+        await c.test_connect(server.id)
+        port, test_port = listener.proxy_port, c.test_port
+        # The fake server does not dial: whatever it answers went through the server.
+        await self.ping(await self.socks_to(port, "localhost", direct), b"main:")
+
+        def rule(priority, reg, action):
+            return RoutingRule(priority=priority, reg=reg, action=RoutingAction(action))
+
+        rules = [
+            rule(3, "*.example.com", "block"),
+            rule(1, "LocalHost", "direct"),
+            rule(2, "127.0.0.*", "direct"),
+            rule(4, "10.*", "block"),
+        ]
+        await c.routing_set(rules)
+        self.assertEqual(c._rules, sorted(rules, key=lambda item: item.priority))
+        open_direct = await self.socks_to(port, "localhost", direct)
+        await self.ping(open_direct, b"direct:")
+        await self.ping(await self.socks_to(port, "127.0.0.1", direct), b"direct:")
+        await self.blocked(await self.socks_to(port, "www.example.com", 80))
+        await self.blocked(await self.socks_to(port, "10.1.2.3", 80))
+        # Not a subdomain, so no rule matches and the traffic goes through the server.
+        await self.ping(await self.socks_to(port, "example.com", 80), b"main:")
+        # The test endpoint ignores the rules.
+        await self.ping(await self.socks_to(test_port, "localhost", direct), b"main:")
+        await self.ping(await self.socks_to(test_port, "www.example.com", 80), b"main:")
+
+        # The first matching rule wins; open connections keep their way.
+        await c.routing_set([rule(1, "*", "block"), *rules])
+        await self.blocked(await self.socks_to(port, "localhost", direct))
+        await self.blocked(await self.socks_to(port, "example.com", 80))
+        await self.ping(open_direct, b"direct:")
+        await self.ping(await self.socks_to(test_port, "localhost", direct), b"main:")
+
+        # proxy follows the main route; direct works while nothing is connected.
+        await c.routing_set([rule(1, "example.com", "proxy"), rule(2, "localhost", "direct")])
+        await self.ping(await self.socks_to(port, "example.com", 80), b"main:")
+        await c.outbound_disconnect()
+        await self.blocked(await self.socks_to(port, "example.com", 80))
+        await self.ping(await self.socks_to(port, "localhost", direct), b"direct:")
+        # New servers and inbounds keep the rules.
+        await c.outbound_register([server])
+        other = inbound()
+        await c.inbound_set(other)
+        await self.ping(await self.socks_to(other.proxy_port, "localhost", direct), b"direct:")
+        await self.blocked(await self.socks_to(other.proxy_port, "example.com", 80))
+        rule_types = [item["type"] for item in (await c.rest_client.get_rules())["rules"]]
+        self.assertEqual(
+            rule_types, ["InName", "DomainRegex", "DomainRegex", "InName", "InName", "Match"]
+        )
+        await c.routing_set([])
+        await self.blocked(await self.socks_to(port, "localhost", direct))
