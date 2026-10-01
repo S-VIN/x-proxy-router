@@ -167,7 +167,7 @@ class OutboundServer:
     speed: int | None = None
     # Overall score for choosing a server; higher is better.
     rating: int | None = None
-    # Results of ServerSettings.outbound_tests: alias -> passed.
+    # Results of the outbound tests: OutboundTest.id -> passed.
     tests: dict[str, bool] | None = None
     # Why the server is filtered, or None. A filtered server cannot be connected,
     # and checks skip it, except BY_PING: those are checked again to come back.
@@ -187,7 +187,7 @@ class OutboundServer:
         if self.tests is not None and not all(
             type(passed) is bool for passed in self.tests.values()
         ):
-            raise ValueError("tests must map test aliases to booleans")
+            raise ValueError("tests must map test ids to booleans")
         for name, default in _PROTOCOL_DEFAULTS.items():
             value = getattr(self, name)
             if not name.startswith(f"{self.protocol.value}_"):

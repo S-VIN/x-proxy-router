@@ -1,8 +1,7 @@
 import type { Connection } from '../api/connection.svelte';
-import type { OutboundTest } from '../api/protocol';
 import { Collection } from './collection.svelte';
 
-/** Server-wide settings: the refresh interval, the tests servers are checked with, auto-connect. */
+/** Server-wide settings: the refresh interval and auto-connect. */
 export class ServerSettingsStore {
   #connection: Connection;
   #collection = new Collection<'server_settings'>();
@@ -20,11 +19,6 @@ export class ServerSettingsStore {
       id: 0,
       subscription_refresh_interval: seconds,
     });
-  }
-
-  /** Replaces the whole list of tests. */
-  setOutboundTests(tests: OutboundTest[]) {
-    return this.#connection.request('change/server_settings', { id: 0, outbound_tests: tests });
   }
 
   /**

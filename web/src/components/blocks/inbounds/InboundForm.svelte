@@ -6,11 +6,9 @@
     draftErrors,
     draftFields,
     draftSettings,
-    INBOUND_TYPES,
     inboundDraft,
     inboundTypeLabel,
     type FieldErrors,
-    type InboundDraft,
   } from '../../../lib/inbounds';
   import { inboundServers } from '../../../lib/stores';
   import Button from '../../ui/Button.svelte';
@@ -18,20 +16,20 @@
   import ProxyFields from './ProxyFields.svelte';
 
   interface Props {
-    /** The inbound to edit; null adds a new one, starting with its type. */
+    /** The inbound to edit; null adds a new one of `type`. */
     inbound: InboundServer | null;
+    /** The type of a new inbound; an edited one keeps its own. */
+    type: InboundType;
     ready: boolean;
     /** Called after saving or on cancel. */
     onclose: () => void;
   }
 
-  let { inbound, ready, onclose }: Props = $props();
+  let { inbound, type, ready, onclose }: Props = $props();
 
-  // Settings of the chosen type; null while a new inbound has no type yet. They start
-  // from the inbound as it is when the form opens and then keep the user's edits.
-  let draft = $state<InboundDraft | null>(
-    untrack(() => (inbound ? inboundDraft(inbound.type, inbound, inboundServers.list) : null)),
-  );
+  // Settings of the type, null for types this page does not know. They start from
+  // the inbound as it is when the form opens and then keep the user's edits.
+  let draft = $state(untrack(() => inboundDraft(type, inbound, inboundServers.list)));
   let submitted = $state(false);
   let saving = $state(false);
   let error = $state<string | null>(null);
@@ -46,12 +44,6 @@
     }
     return shown;
   });
-
-  function choose(type: InboundType) {
-    draft = inboundDraft(type, null, inboundServers.list);
-    submitted = false;
-    error = null;
-  }
 
   async function save(event: SubmitEvent) {
     event.preventDefault();
@@ -88,35 +80,16 @@
 </script>
 
 <form class="form" novalidate onsubmit={save}>
-  {#if draft === null}
-    <p class="step">Choose a type</p>
-    <ul class="types">
-      {#each INBOUND_TYPES as info (info.type)}
-        <li>
-          <button type="button" class="type" onclick={() => choose(info.type)}>
-            <span class="type-label">{info.label}</span>
-            <span class="type-text">{info.description}</span>
-          </button>
-        </li>
-      {/each}
-    </ul>
-  {:else}
-    {#if inbound === null}
-      <div class="chosen">
-        <span class="step">{inboundTypeLabel(draft.type)}</span>
-        <Button variant="flat" size="sm" disabled={saving} onclick={() => (draft = null)}>
-          Change type
-        </Button>
-      </div>
-    {/if}
-    {#if draft.type === 'proxy'}
-      <ProxyFields
-        bind:draft={draft.proxy}
-        errors={shownErrors}
-        hasPassword={inbound?.proxy_username != null}
-        disabled={saving}
-      />
-    {/if}
+  {#if inbound === null}
+    <p class="title">New {inboundTypeLabel(type).toLowerCase()}</p>
+  {/if}
+  {#if draft?.type === 'proxy'}
+    <ProxyFields
+      bind:draft={draft.proxy}
+      errors={shownErrors}
+      hasPassword={inbound?.proxy_username != null}
+      disabled={saving}
+    />
   {/if}
 
   {#if error}
@@ -143,51 +116,9 @@
     background: var(--color-surface-sunken);
   }
 
-  .step {
+  .title {
     font-size: var(--text-sm);
     font-weight: var(--weight-medium);
-  }
-
-  .types {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  /* Each type is a card: its name, then what it is for. */
-  .type {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    width: 100%;
-    padding: var(--space-2);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    background: var(--color-surface);
-    color: var(--color-text);
-    text-align: left;
-    transition: background-color var(--duration-fast) var(--easing);
-  }
-
-  .type:hover {
-    background: var(--color-hover);
-  }
-
-  .type-label {
-    font-size: var(--text-sm);
-    font-weight: var(--weight-bold);
-  }
-
-  .type-text {
-    color: var(--color-text-muted);
-    font-size: var(--text-xs);
-  }
-
-  .chosen {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-2);
   }
 
   .footer {

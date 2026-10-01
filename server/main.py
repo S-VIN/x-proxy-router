@@ -37,7 +37,11 @@ from .handlers.inbound_server import (
     start_inbound_servers,
 )
 from .handlers.init import init
-from .handlers.outbound_test import test_outbound_servers
+from .handlers.outbound_test import (
+    add_outbound_test,
+    delete_outbound_test,
+    test_outbound_servers,
+)
 from .handlers.reg_filter import add_reg_filter, delete_reg_filter
 from .handlers.requests import (
     request_connect_outbound_server,
@@ -53,7 +57,6 @@ from .handlers.routing_rule import (
 from .handlers.server_settings import change_server_settings
 from .handlers.subscription_link import (
     add_subscription_link,
-    change_subscription_link,
     delete_subscription_link,
 )
 from .handlers.subscriptions import schedule_refresh_subscriptions
@@ -476,6 +479,7 @@ async def application() -> AsyncIterator[ApplicationContext]:
         sync.register(ModelChannel("server_settings", lambda: [settings.server_settings.get()]))
         sync.register(ModelChannel("subscription_link", settings.subscription_link.get_all))
         sync.register(ModelChannel("reg_filter", settings.reg_filter.get_all))
+        sync.register(ModelChannel("outbound_test", settings.outbound_test.get_all))
         sync.register(ModelChannel("outbound_server", settings.outbound_server.get_all))
         sync.register(ModelChannel("inbound_server", settings.inbound_server.get_all))
         sync.register(ModelChannel("routing_rule", settings.routing_rule.get_all))
@@ -533,10 +537,11 @@ def configure_handlers(context: ApplicationContext) -> None:
     )
     websocket = context.websocket
     websocket.register("add", "subscription_link", partial(add_subscription_link, context))
-    websocket.register("change", "subscription_link", partial(change_subscription_link, context))
     websocket.register("delete", "subscription_link", partial(delete_subscription_link, context))
     websocket.register("add", "reg_filter", partial(add_reg_filter, context))
     websocket.register("delete", "reg_filter", partial(delete_reg_filter, context))
+    websocket.register("add", "outbound_test", partial(add_outbound_test, context))
+    websocket.register("delete", "outbound_test", partial(delete_outbound_test, context))
     websocket.register("add", "inbound_server", partial(add_inbound_server, context))
     websocket.register("change", "inbound_server", partial(change_inbound_server, context))
     websocket.register("delete", "inbound_server", partial(delete_inbound_server, context))

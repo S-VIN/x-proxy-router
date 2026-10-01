@@ -37,27 +37,20 @@ def expect_fields(
     payload: dict[str, JsonValue],
     required: AbstractSet[str],
     optional: AbstractSet[str] = frozenset(),
-    *,
-    prefix: str = "",
 ) -> None:
-    """Reject missing and unknown payload fields with bad_request.
-
-    prefix names a nested object in errors, e.g. "outbound_tests[1]." gives
-    the field outbound_tests[1].url.
-    """
+    """Reject missing and unknown payload fields with bad_request."""
     if missing := sorted(required - payload.keys()):
-        name = prefix + missing[0]
+        name = missing[0]
         raise RequestError(ErrorCode.BAD_REQUEST, f"Field {name} is required", {"field": name})
     if unknown := sorted(payload.keys() - required - optional):
-        name = prefix + unknown[0]
+        name = unknown[0]
         raise RequestError(ErrorCode.BAD_REQUEST, f"Unknown field {name}", {"field": name})
 
 
-def field_value(payload: dict[str, JsonValue], name: str, kind: type[T], *, prefix: str = "") -> T:
+def field_value(payload: dict[str, JsonValue], name: str, kind: type[T]) -> T:
     """Return a payload field of the given JSON type; booleans are not integers."""
     value = payload[name]
     if not isinstance(value, kind) or (isinstance(value, bool) and kind is not bool):
-        name = prefix + name
         raise RequestError(
             ErrorCode.BAD_REQUEST, f"Field {name} must be {kind.__name__}", {"field": name}
         )

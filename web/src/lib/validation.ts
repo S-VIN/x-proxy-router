@@ -27,30 +27,12 @@ export function regFilterError(value: string, filters: readonly RegFilter[]): st
   return null;
 }
 
-export interface TestErrors {
-  alias?: string;
-  url?: string;
-}
-
-/** Per-test problems, index-aligned with `tests`; empty objects when valid. */
-export function validateTests(tests: readonly OutboundTest[]): TestErrors[] {
-  const seen = new Map<string, number>();
-  return tests.map((test) => {
-    const errors: TestErrors = {};
-    const alias = test.alias.trim();
-    if (!alias) {
-      errors.alias = 'Enter a name.';
-    } else {
-      const count = (seen.get(alias) ?? 0) + 1;
-      seen.set(alias, count);
-      if (count > 1) errors.alias = 'This name is already used.';
-    }
-    const urlError = httpUrlError(test.url);
-    if (urlError) errors.url = urlError;
-    return errors;
-  });
-}
-
-export function hasErrors(errors: readonly TestErrors[]): boolean {
-  return errors.some((error) => error.alias !== undefined || error.url !== undefined);
+/** Why the value cannot be added as a test URL, or null. */
+export function testUrlError(value: string, tests: readonly OutboundTest[]): string | null {
+  const url = value.trim();
+  if (!url) return 'Enter a URL.';
+  const error = httpUrlError(url);
+  if (error) return error;
+  if (tests.some((test) => test.url === url)) return 'A test with this URL already exists.';
+  return null;
 }

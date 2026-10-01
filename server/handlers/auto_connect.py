@@ -88,11 +88,11 @@ MAX_QUARANTINE = 4 * 60 * 60
 CANDIDATE_QUARANTINE = 10 * 60
 # Servers checked before connecting, at most, per decision.
 CANDIDATES_TRIED = 3
-# Quick checks run it when ServerSettings has no outbound tests, so they check
-# the proxy itself, not only the ping.
+# Quick checks run it when there are no outbound tests, so they check the proxy
+# itself, not only the ping.
 REACHABILITY_TEST = OutboundTest(
+    id="reachability",
     url="https://www.gstatic.com/generate_204",
-    alias="generate_204",
     rule=OutboundTestRule.STATUS_204,
 )
 
@@ -352,7 +352,7 @@ async def _quick_check(
 
     None if the check itself fails, e.g. the core cannot switch its test endpoint.
     """
-    tests = context.settings.server_settings.get().outbound_tests or (REACHABILITY_TEST,)
+    tests = context.settings.outbound_test.get_all() or [REACHABILITY_TEST]
     try:
         return await quick_test_outbound(context, server, tests)
     except Exception:

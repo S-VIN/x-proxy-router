@@ -1,4 +1,5 @@
 import unittest
+from collections.abc import Sequence
 from contextlib import chdir
 from dataclasses import replace
 from tempfile import TemporaryDirectory
@@ -62,17 +63,17 @@ class AutoConnectTestCase(ConnectionTestCase):
         self.state = self.context.auto_connect
 
     async def quick_test(
-        self, context, server: OutboundServer, tests: tuple[OutboundTest, ...]
+        self, context, server: OutboundServer, tests: Sequence[OutboundTest]
     ) -> OutboundServer:
         self.quick_checked.append(server.id)
         outcome = self.quick.get(server.id, True)
         if isinstance(outcome, Exception):
             raise outcome
         if outcome is False:
-            return replace(server, tests=dict.fromkeys((test.alias for test in tests), False))
+            return replace(server, tests=dict.fromkeys((test.id for test in tests), False))
         rating = server.rating if outcome is True else outcome
         return replace(
-            server, rating=rating, tests=dict.fromkeys((test.alias for test in tests), True)
+            server, rating=rating, tests=dict.fromkeys((test.id for test in tests), True)
         )
 
     def rate(
@@ -482,14 +483,10 @@ class WatchTests(AutoConnectTestCase):
             checked_with.append(tuple(tests))
             return await self.quick_test(context, server, tests)
 
-        test = OutboundTest(
-            url="https://example.com/", alias="site", rule=OutboundTestRule.ANY_STATUS
-        )
+        test = OutboundTest(url="https://example.com/", rule=OutboundTestRule.ANY_STATUS)
         with patch.object(auto_connect, "quick_test_outbound", check):
             await self.tick()
-            self.context.settings.server_settings.save(
-                ServerSettings(outbound_tests=(test,), auto_connect=True)
-            )
+            self.context.settings.outbound_test.add(test)
             await self.tick(CHECK_INTERVAL)
         self.assertEqual(checked_with, [(REACHABILITY_TEST,), (test,)])
 

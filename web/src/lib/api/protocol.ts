@@ -12,10 +12,12 @@ export type TestRule = Open<
   | 'any_status'
 >;
 
+/** Added and deleted, never changed. It has no name: clients name it after its site. */
 export interface OutboundTest {
+  /** The key in OutboundServer.tests. */
+  id: string;
+  /** Unique among the tests. */
   url: string;
-  /** Unique, non-empty; the key in OutboundServer.tests. */
-  alias: string;
   rule: TestRule;
 }
 
@@ -25,7 +27,6 @@ export interface ServerSettings {
   subscription_refresh_interval: number;
   /** ISO 8601 UTC time of the last successful refresh. */
   last_subscription_refresh: string | null;
-  outbound_tests: OutboundTest[];
   /** The server chooses the connected server itself; a client's choice turns it off. */
   auto_connect: boolean;
 }
@@ -78,7 +79,7 @@ export interface OutboundServer {
   speed: number | null;
   /** 0–100; null when not checked. */
   rating: number | null;
-  /** Test alias → passed; null when not checked. May keep aliases of removed tests. */
+  /** Test id → passed; null when not checked. May keep ids of removed tests. */
   tests: Record<string, boolean> | null;
   /** Filtered servers cannot be connected; null when not filtered. */
   filtered: FilterReason | null;
@@ -135,6 +136,7 @@ export interface Models {
   server_settings: ServerSettings;
   subscription_link: SubscriptionLink;
   reg_filter: RegFilter;
+  outbound_test: OutboundTest;
   outbound_server: OutboundServer;
   inbound_server: InboundServer;
   routing_rule: RoutingRule;
@@ -147,6 +149,7 @@ export const MODEL_NAMES: readonly ModelName[] = [
   'server_settings',
   'subscription_link',
   'reg_filter',
+  'outbound_test',
   'outbound_server',
   'inbound_server',
   'routing_rule',
@@ -197,10 +200,11 @@ type Empty = Record<string, never>;
 /** Every request the server accepts, keyed by "type/model". */
 export interface Requests {
   'add/subscription_link': { payload: { url: string }; result: { id: string } };
-  'change/subscription_link': { payload: { id: string; url?: string }; result: Empty };
   'delete/subscription_link': { payload: { id: string }; result: Empty };
   'add/reg_filter': { payload: { reg: string }; result: { id: string } };
   'delete/reg_filter': { payload: { id: string }; result: Empty };
+  'add/outbound_test': { payload: { url: string; rule: TestRule }; result: { id: string } };
+  'delete/outbound_test': { payload: { id: string }; result: Empty };
   'add/inbound_server': {
     payload: { type: InboundType } & InboundSettings;
     result: { id: string };
@@ -220,7 +224,6 @@ export interface Requests {
     payload: {
       id: 0;
       subscription_refresh_interval?: number;
-      outbound_tests?: OutboundTest[];
       auto_connect?: boolean;
     };
     result: Empty;

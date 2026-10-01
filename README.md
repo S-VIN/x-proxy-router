@@ -124,11 +124,11 @@ npm run format:check  # стиль (Prettier); npm run format — исправи
 и блоки интерфейса (`blocks`). Цвета, отступы и шрифты заданы переменными в
 `src/styles/tokens.css`.
 
-Новый inbound добавляется в два шага: сначала тип, потом его настройки. Чтобы
-добавить тип, нужно:
+У каждого типа inbound своя кнопка в блоке Inbounds, например «Add proxy»: она
+открывает настройки нового inbound этого типа. Чтобы добавить тип, нужно:
 
-- описать его в `INBOUND_TYPES` и `InboundDraft` в `src/lib/inbounds.ts` с проверками и
-  полями запроса;
+- описать его в `INBOUND_TYPES` (по нему появляется кнопка) и `InboundDraft` в
+  `src/lib/inbounds.ts` с проверками и полями запроса;
 - сделать компонент настроек рядом с `ProxyFields`
   (`src/components/blocks/inbounds`);
 - показать этот компонент в `InboundForm`.

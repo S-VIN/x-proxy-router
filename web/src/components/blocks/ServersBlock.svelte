@@ -12,6 +12,7 @@
   import {
     connection,
     outboundServers,
+    outboundTests,
     regFilters,
     serverSettings,
     subscriptionLinks,
@@ -23,7 +24,6 @@
   import Notice from '../ui/Notice.svelte';
   import Select, { type Option } from '../ui/Select.svelte';
   import Switch from '../ui/Switch.svelte';
-  import TextField from '../ui/TextField.svelte';
   import ServerRow from './servers/ServerRow.svelte';
 
   let { order }: { order: number } = $props();
@@ -32,7 +32,6 @@
   // Servers of deleted subscriptions stay until the next refresh.
   const OTHER = 'other';
 
-  let search = $state('');
   let subscription = $state(ALL);
   let protocol = $state(ALL);
   let sort = $state<SortKey>('rating');
@@ -42,7 +41,7 @@
   let autoConnectPending = $state<boolean | null>(null);
   let autoConnectError = $state<string | null>(null);
 
-  const tests = $derived(serverSettings.current?.outbound_tests ?? []);
+  const tests = $derived(outboundTests.list);
   // Room for a mark per test (8px and a 3px gap), at least for the "Tests" heading.
   const testsWidth = $derived(`${Math.max(36, tests.length * 11 - 3)}px`);
   const total = $derived(outboundServers.list.length);
@@ -82,8 +81,6 @@
     if (!protocolOptions.some((option) => option.value === protocol)) protocol = ALL;
   });
 
-  const needle = $derived(search.trim().toLowerCase());
-
   function matches(server: OutboundServer): boolean {
     if (
       subscription === OTHER
@@ -92,13 +89,7 @@
     ) {
       return false;
     }
-    if (protocol !== ALL && server.protocol !== protocol) return false;
-    if (!needle) return true;
-    return (
-      server.name.toLowerCase().includes(needle) ||
-      server.address.toLowerCase().includes(needle) ||
-      (server.source_tag?.toLowerCase().includes(needle) ?? false)
-    );
+    return protocol === ALL || server.protocol === protocol;
   }
 
   const filtered = $derived(outboundServers.list.filter(matches));
@@ -120,7 +111,7 @@
   let shownQuery = '';
   const rows = $derived.by(() => {
     const nameFilters = regFilters.list.map((filter) => filter.id).join(' ');
-    const query = [sort, subscription, protocol, needle, nameFilters].join('\n');
+    const query = [sort, subscription, protocol, nameFilters].join('\n');
     const compare = filteredLast(COMPARATORS[sort]);
     const result =
       tasks.testing && query === shownQuery
@@ -131,10 +122,9 @@
     return result;
   });
 
-  const filtersActive = $derived(needle !== '' || subscription !== ALL || protocol !== ALL);
+  const filtersActive = $derived(subscription !== ALL || protocol !== ALL);
 
   function resetFilters() {
-    search = '';
     subscription = ALL;
     protocol = ALL;
   }
@@ -204,16 +194,6 @@
   {/snippet}
 
   <div class="toolbar">
-    <div class="search">
-      <TextField
-        size="sm"
-        type="search"
-        icon="search"
-        placeholder="Search by name or address"
-        aria-label="Search servers"
-        bind:value={search}
-      />
-    </div>
     <div class="filters">
       <Select
         size="sm"
@@ -282,11 +262,6 @@
     padding: 0 var(--space-3) var(--space-2);
   }
 
-  .search {
-    flex: 1 1 11rem;
-    min-width: 0;
-  }
-
   .filters {
     display: flex;
     flex: 1 1 auto;
@@ -306,7 +281,7 @@
   .scroll {
     --server-columns: minmax(7rem, 2fr) minmax(4.5rem, var(--subscription-width)) 5.5rem
       var(--tests-width) 14px;
-    --action-width: 84px;
+    --action-width: 92px;
     /* Also clips absolutely positioned descendants (visually hidden labels). */
     position: relative;
     min-height: 0;

@@ -9,7 +9,6 @@
   } from '../../../lib/inbounds';
   import { inboundServers } from '../../../lib/stores';
   import Button from '../../ui/Button.svelte';
-  import ConfirmButton from '../../ui/ConfirmButton.svelte';
   import Notice from '../../ui/Notice.svelte';
   import Switch from '../../ui/Switch.svelte';
   import InboundForm from './InboundForm.svelte';
@@ -104,13 +103,14 @@
               onclick={startEditing}
             />
           {/if}
-          <ConfirmButton
-            label="Delete inbound"
+          <Button
+            variant="flat"
+            size="sm"
             icon="trash"
-            confirmLabel="Delete"
+            label="Delete inbound"
             busy={deleting}
             disabled={!ready}
-            onconfirm={remove}
+            onclick={remove}
           />
         </div>
       {/if}
@@ -128,7 +128,7 @@
   {/if}
 
   {#if editing}
-    <InboundForm {inbound} {ready} onclose={() => (editing = false)} />
+    <InboundForm {inbound} type={inbound.type} {ready} onclose={() => (editing = false)} />
   {/if}
 
   {#if error}

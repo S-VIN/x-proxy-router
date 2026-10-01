@@ -80,6 +80,7 @@
         <!-- A server filtered after connecting stays connected. -->
         <Badge
           tone="success"
+          size="md"
           title={server.filtered === null
             ? undefined
             : `Stays connected, but is filtered. ${filterText(server.filtered)}`}
@@ -87,7 +88,7 @@
           Connected
         </Badge>
       {:else if server.filtered !== null}
-        <Badge title="Cannot be connected. {filterText(server.filtered)}">Filtered</Badge>
+        <Badge size="md" title="Cannot be connected. {filterText(server.filtered)}">Filtered</Badge>
       {:else}
         <Button
           size="sm"
@@ -200,10 +201,14 @@
     transform: rotate(180deg);
   }
 
+  /* The button and the states that replace it are all as wide as the column. */
   .action {
     display: flex;
-    justify-content: flex-end;
     padding-right: var(--space-2);
+  }
+
+  .action > :global(*) {
+    flex: 1;
   }
 
   .error {

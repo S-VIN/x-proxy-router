@@ -4,14 +4,16 @@
 
   interface Props {
     tone?: Tone;
+    /** sm: a label in text; md: as tall as a small button, to stand in for one. */
+    size?: 'sm' | 'md';
     title?: string;
     children: Snippet;
   }
 
-  let { tone = 'neutral', title, children }: Props = $props();
+  let { tone = 'neutral', size = 'sm', title, children }: Props = $props();
 </script>
 
-<span class="badge {tone}" {title}>{@render children()}</span>
+<span class="badge {tone} {size}" {title}>{@render children()}</span>
 
 <style>
   .badge {
@@ -27,6 +29,14 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .md {
+    justify-content: center;
+    height: var(--control-height-sm);
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
   }
 
   .neutral {

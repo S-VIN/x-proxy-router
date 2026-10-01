@@ -36,24 +36,6 @@ export function ratingTone(rating: number | null): Tone {
   return 'danger';
 }
 
-const relative = new Intl.RelativeTimeFormat('en', { numeric: 'auto', style: 'short' });
-
-/** "just now", "5 min. ago", "yesterday" for an ISO time, relative to `now` (ms). */
-export function formatRelative(iso: string, now: number): string {
-  const seconds = Math.round((Date.parse(iso) - now) / 1000);
-  const abs = Math.abs(seconds);
-  if (abs < 45) return 'just now';
-  if (abs < 3600) return relative.format(Math.round(seconds / 60), 'minute');
-  if (abs < 86400) return relative.format(Math.round(seconds / 3600), 'hour');
-  return relative.format(Math.round(seconds / 86400), 'day');
-}
-
-const dateTime = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' });
-
-export function formatDateTime(iso: string): string {
-  return dateTime.format(new Date(iso));
-}
-
 export type IntervalUnit = 'minutes' | 'hours' | 'days';
 
 export const UNIT_SECONDS: Record<IntervalUnit, number> = {
@@ -111,6 +93,24 @@ export function siteLabel(urlShort: string): string {
   if (!second) return host;
   if (third && top.length === 2 && SECOND_LEVEL.has(second)) return third;
   return second;
+}
+
+/** Site names of the items' URLs by id, numbered when several share one: "alpha (1)". */
+export function siteLabels<T extends { id: string }>(
+  items: readonly T[],
+  url: (item: T) => string,
+): Map<string, string> {
+  const sites = new Map(items.map((item) => [item.id, siteLabel(url(item))]));
+  const totals = new Map<string, number>();
+  for (const site of sites.values()) totals.set(site, (totals.get(site) ?? 0) + 1);
+  const seen = new Map<string, number>();
+  const labels = new Map<string, string>();
+  for (const [id, site] of sites) {
+    const index = (seen.get(site) ?? 0) + 1;
+    seen.set(site, index);
+    labels.set(id, (totals.get(site) ?? 0) > 1 ? `${site} (${index})` : site);
+  }
+  return labels;
 }
 
 export function plural(count: number, one: string, many = `${one}s`): string {

@@ -27,7 +27,6 @@ from .models.outbound_server import (
 from .models.outbound_test import OutboundTest, OutboundTestRule
 from .models.reg_filter import RegFilter
 from .models.routing_rule import RoutingAction, RoutingRule, placed, without
-from .models.serialization import serialize
 from .models.server_settings import ServerSettings
 from .models.subscription_link import SubscriptionLink
 
@@ -44,7 +43,6 @@ class ServerSettingsStore:
                 "id INTEGER PRIMARY KEY NOT NULL CHECK (id = 0), "
                 "subscription_refresh_interval INTEGER NOT NULL, "
                 "last_subscription_refresh TEXT, "
-                "outbound_tests TEXT NOT NULL, "
                 "auto_connect INTEGER NOT NULL DEFAULT 0)"
             )
             # Databases created before auto_connect get the column, with the mode off.
@@ -60,31 +58,22 @@ class ServerSettingsStore:
 
     def get(self) -> ServerSettings:
         row = self._connection.execute(
-            "SELECT subscription_refresh_interval, last_subscription_refresh, outbound_tests, "
-            "auto_connect FROM server_settings WHERE id = 0"
+            "SELECT subscription_refresh_interval, last_subscription_refresh, auto_connect "
+            "FROM server_settings WHERE id = 0"
         ).fetchone()
         if row is None:
             raise LookupError("The server_settings row was deleted outside the application")
-        interval, refreshed, tests, auto_connect = row
+        interval, refreshed, auto_connect = row
         return ServerSettings(
             subscription_refresh_interval=interval,
             last_subscription_refresh=(
                 datetime.fromisoformat(refreshed) if refreshed is not None else None
             ),
-            outbound_tests=tuple(
-                OutboundTest(
-                    url=test["url"], alias=test["alias"], rule=OutboundTestRule(test["rule"])
-                )
-                for test in json.loads(tests)
-            ),
             auto_connect=bool(auto_connect),
         )
 
     def save(self, settings: ServerSettings) -> None:
-        """Replace the stored settings.
-
-        The datetime is stored as ISO 8601 in UTC, outbound tests as a JSON array.
-        """
+        """Replace the stored settings; the datetime is stored as ISO 8601 in UTC."""
         with self._connection:
             self._write(settings, "INSERT OR REPLACE")
 
@@ -92,13 +81,12 @@ class ServerSettingsStore:
         refreshed = settings.last_subscription_refresh
         self._connection.execute(
             f"{statement} INTO server_settings "
-            "(id, subscription_refresh_interval, last_subscription_refresh, outbound_tests, "
-            "auto_connect) VALUES (?, ?, ?, ?, ?)",
+            "(id, subscription_refresh_interval, last_subscription_refresh, auto_connect) "
+            "VALUES (?, ?, ?, ?)",
             (
                 settings.id,
                 settings.subscription_refresh_interval,
                 refreshed.isoformat() if refreshed is not None else None,
-                json.dumps(serialize(settings.outbound_tests), ensure_ascii=False),
                 settings.auto_connect,
             ),
         )
@@ -185,6 +173,41 @@ class RegFilterStore:
         """Delete a filter by id; return False if it did not exist."""
         with self._connection:
             cursor = self._connection.execute("DELETE FROM reg_filters WHERE id = ?", (filter_id,))
+        return cursor.rowcount > 0
+
+
+class OutboundTestStore:
+    """Tests of outbound servers, sharing the connection owned by SettingsStore."""
+
+    def __init__(self, connection: sqlite3.Connection):
+        self._connection = connection
+        with self._connection:
+            self._connection.execute(
+                "CREATE TABLE IF NOT EXISTS outbound_tests ("
+                "id TEXT PRIMARY KEY NOT NULL, url TEXT NOT NULL UNIQUE, rule TEXT NOT NULL)"
+            )
+
+    def get_all(self) -> list[OutboundTest]:
+        """Return a snapshot of all tests in insertion order."""
+        return [
+            OutboundTest(id=id_, url=url, rule=OutboundTestRule(rule))
+            for id_, url, rule in self._connection.execute(
+                "SELECT id, url, rule FROM outbound_tests ORDER BY rowid"
+            )
+        ]
+
+    def add(self, test: OutboundTest) -> None:
+        """Insert a test; an id or URL already stored raises sqlite3.IntegrityError."""
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO outbound_tests (id, url, rule) VALUES (?, ?, ?)",
+                (test.id, test.url, test.rule.value),
+            )
+
+    def delete(self, test_id: str) -> bool:
+        """Delete a test by id; return False if it did not exist."""
+        with self._connection:
+            cursor = self._connection.execute("DELETE FROM outbound_tests WHERE id = ?", (test_id,))
         return cursor.rowcount > 0
 
 
@@ -622,6 +645,43 @@ class OutboundServerStore:
                 self._write(server)
 
 
+def _move_outbound_tests(connection: sqlite3.Connection) -> None:
+    """Move tests of databases from before OutboundTest.id to their own table.
+
+    Such databases keep them in server_settings.outbound_tests as a JSON array of
+    {url, alias, rule}, and the servers' results by alias. The tests get ids, the
+    results are keyed by them, and the column is dropped. A test whose URL is
+    already stored keeps the stored id.
+    """
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(server_settings)")}
+    if "outbound_tests" not in columns:
+        return
+    with connection:
+        row = connection.execute("SELECT outbound_tests FROM server_settings").fetchone()
+        ids = {}
+        for item in json.loads(row[0]) if row is not None else []:
+            test = OutboundTest(url=item["url"], rule=OutboundTestRule(item["rule"]))
+            connection.execute(
+                "INSERT OR IGNORE INTO outbound_tests (id, url, rule) VALUES (?, ?, ?)",
+                (test.id, test.url, test.rule.value),
+            )
+            (ids[item["alias"]],) = connection.execute(
+                "SELECT id FROM outbound_tests WHERE url = ?", (test.url,)
+            ).fetchone()
+        servers = connection.execute(
+            "SELECT id, tests FROM outbound_servers WHERE tests IS NOT NULL"
+        ).fetchall()
+        for server_id, tests in servers:
+            results = {
+                ids[alias]: passed for alias, passed in json.loads(tests).items() if alias in ids
+            }
+            connection.execute(
+                "UPDATE outbound_servers SET tests = ? WHERE id = ?",
+                (json.dumps(results), server_id),
+            )
+        connection.execute("ALTER TABLE server_settings DROP COLUMN outbound_tests")
+
+
 class SettingsStore:
     """One active store per process, with entity-specific access to SQLite.
 
@@ -634,6 +694,7 @@ class SettingsStore:
     server_settings: ServerSettingsStore
     subscription_link: SubscriptionLinkStore
     reg_filter: RegFilterStore
+    outbound_test: OutboundTestStore
     outbound_server: OutboundServerStore
     inbound_server: InboundServerStore
     routing_rule: RoutingRuleStore
@@ -647,11 +708,13 @@ class SettingsStore:
                 instance.server_settings = ServerSettingsStore(instance._connection)
                 instance.subscription_link = SubscriptionLinkStore(instance._connection)
                 instance.reg_filter = RegFilterStore(instance._connection)
+                instance.outbound_test = OutboundTestStore(instance._connection)
                 instance.outbound_server = OutboundServerStore(
                     instance._connection, instance.reg_filter
                 )
                 instance.inbound_server = InboundServerStore(instance._connection)
                 instance.routing_rule = RoutingRuleStore(instance._connection)
+                _move_outbound_tests(instance._connection)
             except Exception:
                 instance._connection.close()
                 raise

@@ -12,13 +12,33 @@
   import EmptyState from '../ui/EmptyState.svelte';
   import Notice from '../ui/Notice.svelte';
   import AddSubscriptionForm from './subscriptions/AddSubscriptionForm.svelte';
+  import CustomInterval from './subscriptions/CustomInterval.svelte';
+  import IntervalSelect, { CUSTOM, intervalChoice } from './subscriptions/IntervalSelect.svelte';
   import SubscriptionItem from './subscriptions/SubscriptionItem.svelte';
-  import UpdateSchedule from './subscriptions/UpdateSchedule.svelte';
 
   let { order }: { order: number } = $props();
 
   const settings = $derived(serverSettings.current);
   let refreshError = $state<string | null>(null);
+
+  // The interval is chosen in the header; a custom one is entered in the body.
+  const interval = $derived(settings?.subscription_refresh_interval ?? null);
+  // Follows the server; the user's choice overrides it until the interval changes.
+  let choice = $derived(interval === null ? CUSTOM : intervalChoice(interval));
+  let saving = $state(false);
+  let intervalError = $state<string | null>(null);
+
+  async function setInterval(seconds: number) {
+    saving = true;
+    intervalError = null;
+    try {
+      await serverSettings.setRefreshInterval(seconds);
+    } catch (reason) {
+      intervalError = describeError(reason);
+    } finally {
+      saving = false;
+    }
+  }
 
   async function refresh() {
     refreshError = null;
@@ -45,6 +65,14 @@
   hint="Servers come from these links. Every update reloads servers of all subscriptions. The server keeps links secret and shows only their hosts."
 >
   {#snippet actions()}
+    {#if interval !== null}
+      <IntervalSelect
+        bind:value={choice}
+        {interval}
+        disabled={!connection.ready || saving}
+        onpreset={setInterval}
+      />
+    {/if}
     <Button
       variant="flat"
       size="sm"
@@ -59,7 +87,12 @@
   {#if settings === null}
     <EmptyState compact loading title="Loading…" />
   {:else}
-    <UpdateSchedule {settings} />
+    {#if choice === CUSTOM && interval !== null}
+      <CustomInterval {interval} {saving} ready={connection.ready} onapply={setInterval} />
+    {/if}
+    {#if intervalError}
+      <Notice tone="danger" ondismiss={() => (intervalError = null)}>{intervalError}</Notice>
+    {/if}
     {#if refreshError}
       <Notice tone="danger" ondismiss={() => (refreshError = null)}>{refreshError}</Notice>
     {/if}

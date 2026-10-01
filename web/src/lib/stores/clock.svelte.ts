@@ -1,4 +1,4 @@
-/** The current time, updated every second, for relative times and countdowns. */
+/** The current time, updated every second, for countdowns. */
 class Clock {
   now = $state(Date.now());
 

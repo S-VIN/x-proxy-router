@@ -5,6 +5,7 @@
     alert: 'M8 2.5 14.5 13.5h-13zM8 6.5v3M8 11.5h.01',
     check: 'm3 8.5 3.2 3L13 4.5',
     'chevron-down': 'm4 6 4 4 4-4',
+    'chevron-up': 'm4 10 4-4 4 4',
     close: 'm4 4 8 8M12 4l-8 8',
     edit: 'M10.5 2.5 13.5 5.5 6 13H3v-3zM9 4l3 3',
     filter: 'M2.5 3h11L9.5 8v4.5l-3 1.5V8z',

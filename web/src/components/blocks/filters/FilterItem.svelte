@@ -2,7 +2,7 @@
   import { describeError } from '../../../lib/api/errors';
   import type { RegFilter } from '../../../lib/api/protocol';
   import { regFilters } from '../../../lib/stores';
-  import ConfirmButton from '../../ui/ConfirmButton.svelte';
+  import Button from '../../ui/Button.svelte';
   import Notice from '../../ui/Notice.svelte';
 
   let { filter, ready }: { filter: RegFilter; ready: boolean } = $props();
@@ -25,13 +25,14 @@
 <li class="item">
   <div class="line">
     <code class="reg" title={filter.reg}>{filter.reg}</code>
-    <ConfirmButton
-      label="Remove filter"
+    <Button
+      variant="flat"
+      size="sm"
       icon="trash"
-      confirmLabel="Remove"
+      label="Remove filter"
       busy={deleting}
       disabled={!ready}
-      onconfirm={remove}
+      onclick={remove}
     />
   </div>
   {#if error}

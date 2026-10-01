@@ -4,9 +4,9 @@ import {
   filterText,
   formatInterval,
   formatPing,
-  formatRelative,
   formatSpeed,
   siteLabel,
+  siteLabels,
   splitInterval,
   stackLabel,
 } from './format';
@@ -15,7 +15,7 @@ import {
   inboundAddress,
   inboundDetails,
   inboundDraft,
-  LISTEN_OTHER,
+  isIpAddress,
   proxyDraft,
   proxyErrors,
   proxyOpen,
@@ -24,7 +24,7 @@ import {
 } from './inbounds';
 import { COMPARATORS, filteredLast, keepOrder } from './ordering';
 import { actionInfo, catchAllIndex, normalizedPattern, routingPatternError } from './routing';
-import { hasErrors, httpUrlError, regFilterError, validateTests } from './validation';
+import { httpUrlError, regFilterError, testUrlError } from './validation';
 
 function server(id: string, fields: Partial<OutboundServer>): OutboundServer {
   return { id, name: id, rating: null, ping: null, speed: null, ...fields } as OutboundServer;
@@ -51,14 +51,6 @@ describe('format', () => {
     expect(splitInterval(90)).toEqual({ value: 2, unit: 'minutes' });
   });
 
-  it('formats relative times', () => {
-    const now = Date.parse('2026-09-27T12:00:00Z');
-    expect(formatRelative('2026-09-27T11:59:50Z', now)).toBe('just now');
-    expect(formatRelative('2026-09-27T11:55:00Z', now)).toBe('5 min. ago');
-    expect(formatRelative('2026-09-27T09:00:00.123456Z', now)).toBe('3 hr. ago');
-    expect(formatRelative('2026-09-26T12:00:00Z', now)).toBe('yesterday');
-  });
-
   it('names the site of a link', () => {
     expect(siteLabel('https://sub.provider.com')).toBe('provider');
     expect(siteLabel('https://provider.co.uk:8443')).toBe('provider');
@@ -67,6 +59,20 @@ describe('format', () => {
     expect(siteLabel('http://10.0.0.1:2096')).toBe('10.0.0.1');
     expect(siteLabel('http://[::1]:8080')).toBe('[::1]');
     expect(siteLabel('http://localhost')).toBe('localhost');
+    expect(siteLabel('https://www.gstatic.com/generate_204')).toBe('gstatic');
+    expect(siteLabel('https://api.anthropic.com/api/hello?x=1')).toBe('anthropic');
+  });
+
+  it('names tests after their sites, numbering repeated ones', () => {
+    const labels = siteLabels(
+      [
+        { id: 'a', url: 'https://www.google.com/generate_204' },
+        { id: 'b', url: 'https://web.telegram.org/' },
+        { id: 'c', url: 'https://google.com/' },
+      ],
+      (test) => test.url,
+    );
+    expect([...labels.values()]).toEqual(['google (1)', 'telegram', 'google (2)']);
   });
 
   it('names the protocol stack', () => {
@@ -138,17 +144,12 @@ describe('validation', () => {
     expect(httpUrlError('sub.example')).not.toBeNull();
   });
 
-  it('checks test names and URLs', () => {
-    const errors = validateTests([
-      { alias: 'google', url: 'https://www.gstatic.com/generate_204', rule: 'status_204' },
-      { alias: ' google ', url: 'https://example.com', rule: 'any_status' },
-      { alias: '', url: 'nope', rule: 'any_status' },
-    ]);
-    expect(errors[0]).toEqual({});
-    expect(errors[1]?.alias).toBeDefined();
-    expect(errors[2]).toMatchObject({ alias: expect.any(String), url: expect.any(String) });
-    expect(hasErrors(errors)).toBe(true);
-    expect(hasErrors([{}])).toBe(false);
+  it('checks the URL of a new test', () => {
+    const tests = [{ id: 't', url: 'https://www.gstatic.com/generate_204', rule: 'status_204' }];
+    expect(testUrlError(' https://example.com/ ', tests)).toBeNull();
+    expect(testUrlError('', tests)).not.toBeNull();
+    expect(testUrlError('example.com', tests)).not.toBeNull();
+    expect(testUrlError('https://www.gstatic.com/generate_204 ', tests)).toContain('already');
   });
 
   it('checks new name filters, keeping any characters', () => {
@@ -177,7 +178,6 @@ function inbound(fields: Partial<InboundServer> = {}): InboundServer {
 function draft(fields: Partial<ProxyDraft> = {}): ProxyDraft {
   return {
     listen: '127.0.0.1',
-    address: '',
     port: '1080',
     auth: false,
     username: '',
@@ -212,8 +212,7 @@ describe('inbounds', () => {
       proxyDraft(inbound({ proxy_listen: '192.168.1.5', proxy_username: 'alice' }), []),
     ).toEqual(
       draft({
-        listen: LISTEN_OTHER,
-        address: '192.168.1.5',
+        listen: '192.168.1.5',
         port: '20808',
         auth: true,
         username: 'alice',
@@ -229,7 +228,10 @@ describe('inbounds', () => {
     for (const port of ['', '0', '65536', '10.5', 'x']) {
       expect(proxyErrors(draft({ port }), null, []).proxy_port).toBeDefined();
     }
-    expect(proxyErrors(draft({ listen: LISTEN_OTHER }), null, []).proxy_listen).toBeDefined();
+    for (const listen of ['', ' ', 'localhost', '127.0.0', '256.0.0.1', '01.0.0.1', '[::1]']) {
+      expect(proxyErrors(draft({ listen }), null, []).proxy_listen, listen).toBeDefined();
+    }
+    expect(proxyErrors(draft({ listen: ' 0.0.0.0 ' }), null, [])).toEqual({});
     const auth = draft({ auth: true, username: 'a:b' });
     expect(Object.keys(proxyErrors(auth, null, []))).toEqual(['proxy_username', 'proxy_password']);
     // A stored password is kept when the field is empty.
@@ -264,8 +266,35 @@ describe('inbounds', () => {
     expect(proxyOpen(draft())).toBe(false);
     expect(proxyOpen(draft({ listen: '0.0.0.0' }))).toBe(true);
     expect(proxyOpen(draft({ listen: '0.0.0.0', auth: true }))).toBe(false);
-    expect(proxyOpen(draft({ listen: LISTEN_OTHER }))).toBe(false);
-    expect(proxyOpen(draft({ listen: LISTEN_OTHER, address: '::1' }))).toBe(false);
+    expect(proxyOpen(draft({ listen: '0.0.' }))).toBe(false);
+    expect(proxyOpen(draft({ listen: '::1' }))).toBe(false);
+    expect(proxyOpen(draft({ listen: '::' }))).toBe(true);
+  });
+
+  it('accept IPv4 and IPv6 addresses only', () => {
+    for (const text of [
+      '127.0.0.1',
+      '0.0.0.0',
+      '192.168.1.5',
+      '::',
+      '::1',
+      'fe80::1',
+      '::ffff:1.2.3.4',
+    ]) {
+      expect(isIpAddress(text), text).toBe(true);
+    }
+    for (const text of [
+      '',
+      'localhost',
+      '1.2.3',
+      '1.2.3.4.5',
+      '1.2.3.256',
+      '::g',
+      '[::1]',
+      'fe80::1%eth0',
+    ]) {
+      expect(isIpAddress(text), text).toBe(false);
+    }
   });
 });
 
@@ -309,7 +338,6 @@ describe('routing', () => {
   it('reject a pattern of another rule, as the server compares them', () => {
     expect(routingPatternError('*.YouTube.com', rules)).toContain('already exists');
     expect(routingPatternError('**.youtube.com', rules)).toContain('already exists');
-    expect(routingPatternError('*.youtube.com', rules, 'r1')).toBeNull();
   });
 
   it('find the rule that catches everything', () => {

@@ -7,31 +7,66 @@
     ratingTone,
     stackLabel,
   } from '../../lib/format';
-  import { outboundServers, serverSettings, subscriptionLinks } from '../../lib/stores';
+  import { logoUrl } from '../../lib/logo';
+  import {
+    connection,
+    linkStatus,
+    outboundServers,
+    outboundTests,
+    serverSettings,
+    subscriptionLinks,
+  } from '../../lib/stores';
   import Block from '../layout/Block.svelte';
   import Badge from '../ui/Badge.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import Stat from '../ui/Stat.svelte';
+  import StatusChip from '../ui/StatusChip.svelte';
   import Tag from '../ui/Tag.svelte';
 
   let { order }: { order: number } = $props();
 
   const server = $derived(outboundServers.connected);
   const autoConnect = $derived(serverSettings.current?.auto_connect ?? false);
-  const tests = $derived(serverSettings.current?.outbound_tests ?? []);
+  const tests = $derived(outboundTests.list);
   const passed = $derived(
-    server?.tests ? tests.filter((test) => server?.tests?.[test.alias] === true).length : null,
+    server?.tests ? tests.filter((test) => server?.tests?.[test.id] === true).length : null,
+  );
+  const statusText = $derived(
+    { online: 'Online', connecting: 'Connecting…', offline: 'Offline' }[connection.status],
   );
 </script>
 
 <Block
   title="Connection"
-  icon="route"
   {order}
   hint={autoConnect
     ? 'The server your traffic goes through. Auto-connect picks it and switches when it fails or gets worse; pressing Connect on another server turns auto-connect off.'
     : 'The server your traffic goes through. To switch, press Connect on another server.'}
 >
+  {#snippet lead()}
+    <!-- Blue: no server connected; green: connected; red: an error. -->
+    <img
+      class="logo"
+      src={logoUrl(linkStatus.state)}
+      alt="x-proxy-router: {linkStatus.description}"
+      title={linkStatus.description}
+      width="24"
+      height="24"
+    />
+  {/snippet}
+  {#snippet actions()}
+    <StatusChip
+      dot={connection.status === 'online'
+        ? 'success'
+        : connection.status === 'offline'
+          ? 'danger'
+          : 'warning'}
+      pulse={connection.status === 'connecting'}
+      title="Connection to the x-proxy-router server: {statusText}"
+    >
+      {statusText}
+    </StatusChip>
+  {/snippet}
   {#if serverSettings.current === null}
     <EmptyState compact loading title="Loading…" />
   {:else if server === null}
@@ -81,6 +116,11 @@
 </Block>
 
 <style>
+  .logo {
+    display: block;
+    flex-shrink: 0;
+  }
+
   .current {
     display: flex;
     flex-direction: column;

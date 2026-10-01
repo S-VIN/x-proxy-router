@@ -2,7 +2,6 @@ import asyncio
 import json
 import unittest
 from contextlib import chdir
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
@@ -98,7 +97,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         self.client = Client(self.context.websocket)
         # Skip the initial snapshots.
         async with asyncio.timeout(2):
-            while len(self.client.frames) < 7:
+            while len(self.client.frames) < 8:
                 self.client.received.clear()
                 await self.client.received.wait()
         await startup_finished(self.context)
@@ -128,15 +127,6 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("token", json.dumps(update))
         self.assertEqual(self.context.settings.subscription_link.get_all()[0].url, URL)
-
-        new_url = "https://other.example.com/token"
-        updates, response = await self.client.request(
-            "change", "subscription_link", {"id": link_id, "url": new_url}
-        )
-        self.assertEqual((response["ok"], response["payload"]), (True, {}))
-        self.assertEqual(updates[0]["payload"][0]["url_short"], "https://other.example.com")
-        [changed] = self.context.settings.subscription_link.get_all()
-        self.assertEqual((changed.id, changed.url), (link_id, new_url))
 
         updates, response = await self.client.request(
             "delete", "subscription_link", {"id": link_id}
@@ -508,13 +498,6 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
             ("add", {"url": 1}, "bad_request", {"field": "url"}),
             ("add", {}, "bad_request", {"field": "url"}),
             ("add", {"url": URL, "id": "mine"}, "bad_request", {"field": "id"}),
-            ("change", {"id": "missing", "url": URL}, "not_found", {"field": "id"}),
-            (
-                "change",
-                {"id": existing.id, "url_short": "x"},
-                "bad_request",
-                {"field": "url_short"},
-            ),
             ("delete", {"id": "missing"}, "not_found", {"field": "id"}),
         ]
         for request_type, payload, code, details in cases:
@@ -525,6 +508,11 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.context.settings.subscription_link.get_all(), [existing])
         # Failed requests change nothing, so clients receive no updates.
         self.assertEqual(self.client.frames, [])
+        # A link is deleted and added again instead of being changed.
+        error = await self.client.error(
+            "change", "subscription_link", {"id": existing.id, "url": "https://example.com/new"}
+        )
+        self.assertEqual(error["code"], "unknown_request")
 
     async def test_server_settings(self):
         updates, response = await self.client.request(
@@ -539,6 +527,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
             ({"id": 0, "subscription_refresh_interval": 0}, "validation_error"),
             ({"id": 0, "subscription_refresh_interval": True}, "bad_request"),
             ({"id": 0, "last_subscription_refresh": "2026-09-26T12:00:00Z"}, "bad_request"),
+            ({"id": 0, "outbound_tests": []}, "bad_request"),
             ({"id": 1}, "not_found"),
             ({"id": "0"}, "bad_request"),
         ]
@@ -568,7 +557,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         next_run = job().next_run_time
         self.assertLessEqual(next_run, datetime.now(UTC) + timedelta(seconds=600))
         # Other changes, and the same interval again, keep the timer running.
-        await self.client.request("change", "server_settings", {"id": 0, "outbound_tests": []})
+        await self.client.request("change", "server_settings", {"id": 0, "auto_connect": False})
         await self.client.request(
             "change", "server_settings", {"id": 0, "subscription_refresh_interval": 600}
         )
@@ -579,66 +568,57 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(job().trigger.interval, timedelta(seconds=600))
 
-    async def test_server_settings_outbound_tests(self):
-        google = {
-            "url": "https://www.gstatic.com/generate_204",
-            "alias": "google",
-            "rule": "status_204",
-        }
-        site = {"url": "https://example.com/", "alias": "site", "rule": "status_below_503"}
-        updates, response = await self.client.request(
-            "change", "server_settings", {"id": 0, "outbound_tests": [google, site]}
-        )
-        self.assertTrue(response["ok"])
-        self.assertEqual(updates[0]["payload"][0]["outbound_tests"], [google, site])
-        stored = self.context.settings.server_settings.get()
-        self.assertEqual([test.alias for test in stored.outbound_tests], ["google", "site"])
-        self.assertIs(stored.outbound_tests[1].rule, OutboundTestRule.STATUS_BELOW_503)
-        cases = [
-            ({"outbound_tests": {}}, "bad_request", "outbound_tests"),
-            ({"outbound_tests": [google, "x"]}, "bad_request", "outbound_tests[1]"),
-            (
-                {"outbound_tests": [{"url": google["url"], "alias": "a"}]},
-                "bad_request",
-                "outbound_tests[0].rule",
-            ),
-            (
-                {"outbound_tests": [{**google, "id": 1}]},
-                "bad_request",
-                "outbound_tests[0].id",
-            ),
-            (
-                {"outbound_tests": [{**google, "alias": 1}]},
-                "bad_request",
-                "outbound_tests[0].alias",
-            ),
-            (
-                {"outbound_tests": [google, {**site, "rule": "status_below_42"}]},
-                "validation_error",
-                "outbound_tests[1].rule",
-            ),
-            (
-                {"outbound_tests": [{**google, "url": "ftp://example.com"}]},
-                "validation_error",
-                "outbound_tests[0]",
-            ),
-        ]
-        for changes, code, field in cases:
-            with self.subTest(changes=changes):
-                error = await self.client.error("change", "server_settings", {"id": 0, **changes})
-                self.assertEqual((error["code"], error["details"]), (code, {"field": field}))
-        error = await self.client.error(
-            "change",
-            "server_settings",
-            {"id": 0, "outbound_tests": [google, {**site, "alias": "google"}]},
-        )
-        self.assertEqual(error["code"], "validation_error")
-        self.assertEqual(self.context.settings.server_settings.get(), stored)
-        # An empty list removes all tests; other settings are kept.
-        await self.client.request("change", "server_settings", {"id": 0, "outbound_tests": []})
+    async def test_outbound_test_lifecycle(self):
+        google = {"url": "https://www.gstatic.com/generate_204", "rule": "status_204"}
+        updates, response = await self.client.request("add", "outbound_test", google)
+        test_id = response["payload"]["id"]
         self.assertEqual(
-            self.context.settings.server_settings.get(), replace(stored, outbound_tests=())
+            (response["model"], response["ok"], response["payload"]),
+            ("outbound_test", True, {"id": test_id}),
         )
+        self.assertEqual(
+            [(update["model"], update["payload"]) for update in updates],
+            [("outbound_test", [{"id": test_id, **google}])],
+        )
+        site = {"url": "https://example.com/", "rule": "status_below_503"}
+        _, response = await self.client.request("add", "outbound_test", site)
+        stored = self.context.settings.outbound_test.get_all()
+        self.assertEqual([test.id for test in stored], [test_id, response["payload"]["id"]])
+        self.assertIs(stored[1].rule, OutboundTestRule.STATUS_BELOW_503)
+        updates, response = await self.client.request("delete", "outbound_test", {"id": test_id})
+        self.assertEqual((response["ok"], response["payload"]), (True, {}))
+        self.assertEqual(
+            [(update["model"], update["payload"], update["deleted_ids"]) for update in updates],
+            [("outbound_test", [], [test_id])],
+        )
+        self.assertEqual(self.context.settings.outbound_test.get_all(), stored[1:])
+
+    async def test_outbound_test_errors(self):
+        google = {"url": "https://www.gstatic.com/generate_204", "rule": "status_204"}
+        _, response = await self.client.request("add", "outbound_test", google)
+        stored = self.context.settings.outbound_test.get_all()
+        cases = [
+            ("add", google, "conflict", {"field": "url"}),
+            ("add", {**google, "rule": "status_below_42"}, "validation_error", {"field": "rule"}),
+            ("add", {**google, "url": "ftp://example.com"}, "validation_error", {"field": "url"}),
+            ("add", {"url": google["url"]}, "bad_request", {"field": "rule"}),
+            ("add", {**google, "url": 1}, "bad_request", {"field": "url"}),
+            ("add", {**google, "id": "mine"}, "bad_request", {"field": "id"}),
+            ("add", {**google, "alias": "google"}, "bad_request", {"field": "alias"}),
+            ("delete", {"id": "missing"}, "not_found", {"field": "id"}),
+            ("delete", {}, "bad_request", {"field": "id"}),
+        ]
+        for request_type, payload, code, details in cases:
+            with self.subTest(request_type=request_type, payload=payload):
+                error = await self.client.error(request_type, "outbound_test", payload)
+                self.assertEqual((error["code"], error["details"]), (code, details))
+        self.assertEqual(self.context.settings.outbound_test.get_all(), stored)
+        self.assertEqual(self.client.frames, [])
+        # A test is deleted and added again instead of being changed.
+        error = await self.client.error(
+            "change", "outbound_test", {"id": response["payload"]["id"], "rule": "any_status"}
+        )
+        self.assertEqual(error["code"], "unknown_request")
 
     async def test_auto_connect(self):
         first, second = await self.check_servers()

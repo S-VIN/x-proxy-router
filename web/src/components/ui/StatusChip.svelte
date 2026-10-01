@@ -7,16 +7,14 @@
     /** A colored dot in front. */
     dot?: Tone;
     pulse?: boolean;
-    /** Hide the text on narrow windows; it stays for screen readers and in the tooltip. */
-    collapsible?: boolean;
     title?: string;
     children: Snippet;
   }
 
-  let { dot, pulse = false, collapsible = false, title, children }: Props = $props();
+  let { dot, pulse = false, title, children }: Props = $props();
 </script>
 
-<span class="chip" class:collapsible {title}>
+<span class="chip" {title}>
   {#if dot}
     <StatusDot tone={dot} {pulse} />
   {/if}
@@ -41,19 +39,5 @@
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-
-  @media (max-width: 759px) {
-    .collapsible {
-      padding: 0 var(--space-2);
-    }
-
-    .collapsible .text {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      overflow: hidden;
-      clip-path: inset(50%);
-    }
   }
 </style>
