@@ -1,6 +1,8 @@
 <script lang="ts">
   import ConnectionBlock from './components/blocks/ConnectionBlock.svelte';
   import FiltersBlock from './components/blocks/FiltersBlock.svelte';
+  import InboundsBlock from './components/blocks/InboundsBlock.svelte';
+  import RoutingBlock from './components/blocks/RoutingBlock.svelte';
   import ServersBlock from './components/blocks/ServersBlock.svelte';
   import SubscriptionsBlock from './components/blocks/SubscriptionsBlock.svelte';
   import TestsBlock from './components/blocks/TestsBlock.svelte';
@@ -23,15 +25,17 @@
   <!-- order: position of each block when all of them share one column. -->
   <Dashboard>
     {#snippet left()}
-      <SubscriptionsBlock order={3} />
-      <FiltersBlock order={4} />
+      <SubscriptionsBlock order={4} />
+      <FiltersBlock order={5} />
     {/snippet}
     {#snippet center()}
-      <ServersBlock order={2} />
+      <ServersBlock order={3} />
     {/snippet}
     {#snippet right()}
       <ConnectionBlock order={1} />
-      <TestsBlock order={5} />
+      <InboundsBlock order={2} />
+      <RoutingBlock order={6} />
+      <TestsBlock order={7} />
     {/snippet}
   </Dashboard>
 </div>

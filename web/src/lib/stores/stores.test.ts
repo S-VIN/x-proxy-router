@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { Connection } from '../api/connection.svelte';
 import type { ModelName } from '../api/protocol';
 import { applyMessage } from './collection.svelte';
+import { InboundServersStore } from './inboundServers.svelte';
 import { OutboundServersStore } from './outboundServers.svelte';
 import { RegFiltersStore } from './regFilters.svelte';
+import { RoutingRulesStore } from './routingRules.svelte';
 import { ServerSettingsStore } from './serverSettings.svelte';
 import { linkColors, linkLabels, SubscriptionLinksStore } from './subscriptionLinks.svelte';
 import { TasksStore } from './tasks.svelte';
@@ -126,16 +128,75 @@ describe('stores', () => {
     }) as Connection['request'];
     const filters = new RegFiltersStore(connection);
     deliver('reg_filter', [
-      { id: 'f1', reg: '^RU' },
-      { id: 'f2', reg: '(?i)russia' },
+      { id: 'f1', reg: 'RU*' },
+      { id: 'f2', reg: '*russia*' },
     ]);
     deliver('reg_filter', [], false, ['f1']);
-    expect(filters.list).toEqual([{ id: 'f2', reg: '(?i)russia' }]);
-    void filters.add(' US$');
+    expect(filters.list).toEqual([{ id: 'f2', reg: '*russia*' }]);
+    void filters.add(' US*');
     void filters.remove('f2');
     expect(sent).toEqual([
-      ['add/reg_filter', { reg: ' US$' }],
+      ['add/reg_filter', { reg: ' US*' }],
       ['delete/reg_filter', { id: 'f2' }],
+    ]);
+  });
+
+  it('keep inbounds and send their requests', () => {
+    const { connection, deliver } = fakeConnection();
+    const sent: unknown[] = [];
+    connection.request = ((key: string, payload: unknown) => {
+      sent.push([key, payload]);
+      return Promise.resolve({});
+    }) as Connection['request'];
+    const inbounds = new InboundServersStore(connection);
+    deliver('inbound_server', [
+      { id: 'i1', type: 'proxy', proxy_port: 20808 },
+      { id: 'i2', type: 'proxy', proxy_port: 1080 },
+    ]);
+    deliver('inbound_server', [], false, ['i1']);
+    expect(inbounds.list.map((inbound) => inbound.id)).toEqual(['i2']);
+    void inbounds.add('proxy', { proxy_port: 1081 });
+    void inbounds.change('i2', { enabled: false });
+    void inbounds.change('i2');
+    void inbounds.remove('i2');
+    expect(sent).toEqual([
+      ['add/inbound_server', { type: 'proxy', proxy_port: 1081 }],
+      ['change/inbound_server', { id: 'i2', enabled: false }],
+      ['change/inbound_server', { id: 'i2' }],
+      ['delete/inbound_server', { id: 'i2' }],
+    ]);
+  });
+
+  it('keep routing rules in priority order and send their requests', () => {
+    const { connection, deliver } = fakeConnection();
+    const sent: unknown[] = [];
+    connection.request = ((key: string, payload: unknown) => {
+      sent.push([key, payload]);
+      return Promise.resolve({});
+    }) as Connection['request'];
+    const rules = new RoutingRulesStore(connection);
+    deliver('routing_rule', [
+      { id: 'b', priority: 2, reg: '*', action: 'proxy' },
+      { id: 'a', priority: 1, reg: '192.168.*', action: 'direct' },
+    ]);
+    expect(rules.list.map((rule) => rule.id)).toEqual(['a', 'b']);
+    // Moving a rule renumbers the others in the same message.
+    deliver(
+      'routing_rule',
+      [
+        { id: 'b', priority: 1, reg: '*', action: 'proxy' },
+        { id: 'a', priority: 2, reg: '192.168.*', action: 'direct' },
+      ],
+      false,
+    );
+    expect(rules.list.map((rule) => rule.id)).toEqual(['b', 'a']);
+    void rules.add('*.youtube.com', 'block');
+    void rules.change('a', { priority: 1 });
+    void rules.remove('b');
+    expect(sent).toEqual([
+      ['add/routing_rule', { reg: '*.youtube.com', action: 'block' }],
+      ['change/routing_rule', { id: 'a', priority: 1 }],
+      ['delete/routing_rule', { id: 'b' }],
     ]);
   });
 

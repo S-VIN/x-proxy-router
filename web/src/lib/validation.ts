@@ -18,11 +18,11 @@ export function httpUrlError(value: string): string | null {
 }
 
 /**
- * Why the value cannot be added as a name filter, or null. The syntax is Python's,
- * so only the server checks it. Spaces are part of an expression and kept.
+ * Why the value cannot be added as a name filter, or null. Any characters may be
+ * in a pattern; spaces are part of it and kept.
  */
 export function regFilterError(value: string, filters: readonly RegFilter[]): string | null {
-  if (!value.trim()) return 'Enter a regular expression.';
+  if (!value.trim()) return 'Enter a pattern.';
   if (filters.some((filter) => filter.reg === value)) return 'This filter is already added.';
   return null;
 }

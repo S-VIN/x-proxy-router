@@ -10,17 +10,29 @@
     busy?: boolean;
     /** Shown instead of the label on narrow windows; the label stays the accessible name. */
     shortLabel?: string;
+    /** Only the switch is shown; the label stays the accessible name. */
+    hideLabel?: boolean;
     /** Called with the new state; the owner decides whether `checked` follows. */
     onchange?: (checked: boolean) => void;
   }
 
-  let { checked, label, busy = false, shortLabel, onchange, disabled, ...rest }: Props = $props();
+  let {
+    checked,
+    label,
+    busy = false,
+    shortLabel,
+    hideLabel = false,
+    onchange,
+    disabled,
+    ...rest
+  }: Props = $props();
 </script>
 
 <button
   type="button"
   role="switch"
   class="switch"
+  class:bare={hideLabel}
   aria-checked={checked}
   disabled={disabled || busy}
   aria-busy={busy || undefined}
@@ -30,7 +42,7 @@
   {#if busy}
     <Spinner size={14} />
   {/if}
-  <span class="label" class:long={shortLabel}>{label}</span>
+  <span class="label" class:long={shortLabel} class:visually-hidden={hideLabel}>{label}</span>
   {#if shortLabel}
     <span class="label short" aria-hidden="true">{shortLabel}</span>
   {/if}
@@ -55,6 +67,10 @@
     transition:
       background-color var(--duration-fast) var(--easing),
       opacity var(--duration-fast) var(--easing);
+  }
+
+  .bare {
+    padding: 0 var(--space-1);
   }
 
   .switch:not(:disabled):hover {
