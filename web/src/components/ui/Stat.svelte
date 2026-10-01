@@ -5,15 +5,13 @@
   interface Props {
     label: string;
     tone?: Tone;
-    /** A framed stat with a larger value, for the key figures of a card. */
-    tile?: boolean;
     children: Snippet;
   }
 
-  let { label, tone = 'neutral', tile = false, children }: Props = $props();
+  let { label, tone = 'neutral', children }: Props = $props();
 </script>
 
-<div class="stat {tone}" class:tile>
+<div class="stat {tone}">
   <dt class="label">{label}</dt>
   <dd class="value num">{@render children()}</dd>
 </div>
@@ -37,18 +35,6 @@
     font-weight: var(--weight-bold);
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .tile {
-    gap: 1px;
-    padding: 6px 10px;
-    border-radius: var(--radius-md);
-    background: var(--color-surface);
-    box-shadow: 0 0 0 1px var(--color-border);
-  }
-
-  .tile .value {
-    font-size: var(--text-lg);
   }
 
   .success .value {
