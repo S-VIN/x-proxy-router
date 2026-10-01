@@ -1,4 +1,4 @@
-"""Platform names used by resources/xray (architecture of this Python runtime)."""
+"""Platform names used by resources/mihomo (architecture of this Python runtime)."""
 
 import platform
 import struct

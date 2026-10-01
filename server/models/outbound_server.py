@@ -1,4 +1,4 @@
-"""One remote server from a subscription, independent of Xray and gRPC clients."""
+"""One remote server from a subscription, independent of the core's config format."""
 
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
@@ -96,7 +96,7 @@ _PROTOCOL_DEFAULTS: dict[str, object] = {
 
 @dataclass(kw_only=True)
 class OutboundServer:
-    """Normalized connection data; no fetching, parsing or protobuf conversion.
+    """Normalized connection data; no fetching, parsing or conversion to a core config.
 
     One flat structure for every protocol: only fields prefixed with the active
     protocol's name are set, those of other protocols stay None. Construction
@@ -156,7 +156,7 @@ class OutboundServer:
     )
 
     hysteria_auth: str | None = field(default=None, repr=False, metadata=SECRET)
-    # The bundled Xray supports Hysteria 2 only.
+    # Only Hysteria 2 is supported.
     hysteria_version: Literal[2] | None = None
     hysteria_extra: dict[str, JsonValue] | None = field(default=None, repr=False, metadata=SECRET)
 
