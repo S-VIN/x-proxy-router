@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { OutboundServer } from './api/protocol';
+import type { InboundServer, OutboundServer } from './api/protocol';
 import {
   filterText,
   formatInterval,
@@ -10,7 +10,20 @@ import {
   splitInterval,
   stackLabel,
 } from './format';
+import {
+  freePort,
+  inboundAddress,
+  inboundDetails,
+  inboundDraft,
+  LISTEN_OTHER,
+  proxyDraft,
+  proxyErrors,
+  proxyOpen,
+  proxySettings,
+  type ProxyDraft,
+} from './inbounds';
 import { COMPARATORS, filteredLast, keepOrder } from './ordering';
+import { actionInfo, catchAllIndex, normalizedPattern, routingPatternError } from './routing';
 import { hasErrors, httpUrlError, regFilterError, validateTests } from './validation';
 
 function server(id: string, fields: Partial<OutboundServer>): OutboundServer {
@@ -138,12 +151,176 @@ describe('validation', () => {
     expect(hasErrors([{}])).toBe(false);
   });
 
-  it('checks new name filters, leaving the syntax to the server', () => {
-    const filters = [{ id: '1', reg: '^RU' }];
-    expect(regFilterError('(?i)russia', filters)).toBeNull();
-    expect(regFilterError('(unclosed', filters)).toBeNull();
-    expect(regFilterError(' RU', filters)).toBeNull();
+  it('checks new name filters, keeping any characters', () => {
+    const filters = [{ id: '1', reg: 'RU*' }];
+    expect(regFilterError('*russia*', filters)).toBeNull();
+    expect(regFilterError('(?i)[RU', filters)).toBeNull();
+    expect(regFilterError(' RU*', filters)).toBeNull();
     expect(regFilterError('  ', filters)).not.toBeNull();
-    expect(regFilterError('^RU', filters)).not.toBeNull();
+    expect(regFilterError('RU*', filters)).not.toBeNull();
+  });
+});
+
+function inbound(fields: Partial<InboundServer> = {}): InboundServer {
+  return {
+    id: 'a',
+    type: 'proxy',
+    enabled: true,
+    proxy_listen: '127.0.0.1',
+    proxy_port: 20808,
+    proxy_username: null,
+    error: null,
+    ...fields,
+  };
+}
+
+function draft(fields: Partial<ProxyDraft> = {}): ProxyDraft {
+  return {
+    listen: '127.0.0.1',
+    address: '',
+    port: '1080',
+    auth: false,
+    username: '',
+    password: '',
+    ...fields,
+  };
+}
+
+describe('inbounds', () => {
+  it('describe the address, the reach and the login', () => {
+    expect(inboundAddress(inbound())).toBe('127.0.0.1:20808');
+    expect(inboundAddress(inbound({ proxy_listen: '::' }))).toBe('[::]:20808');
+    expect(inboundDetails(inbound())).toBe('Proxy · this computer · no login');
+    expect(inboundDetails(inbound({ proxy_listen: '0.0.0.0', proxy_username: 'alice' }))).toBe(
+      'Proxy · local network · login alice',
+    );
+    expect(inboundDetails(inbound({ proxy_listen: '192.168.1.5' }))).toBe('Proxy · no login');
+    const tunnel = inbound({ type: 'tun', proxy_listen: null, proxy_port: null });
+    expect(inboundAddress(tunnel)).toBeNull();
+    expect(inboundDetails(tunnel)).toBe('tun');
+    expect(inboundDraft('tun', tunnel, [])).toBeNull();
+  });
+
+  it('suggest a port no inbound uses', () => {
+    expect(freePort([])).toBe(1080);
+    expect(freePort([inbound({ proxy_port: 1080 }), inbound({ proxy_port: 1081 })])).toBe(1082);
+  });
+
+  it('fill the proxy form from an inbound or with defaults', () => {
+    expect(proxyDraft(null, [inbound({ proxy_port: 1080 })])).toEqual(draft({ port: '1081' }));
+    expect(
+      proxyDraft(inbound({ proxy_listen: '192.168.1.5', proxy_username: 'alice' }), []),
+    ).toEqual(
+      draft({
+        listen: LISTEN_OTHER,
+        address: '192.168.1.5',
+        port: '20808',
+        auth: true,
+        username: 'alice',
+      }),
+    );
+  });
+
+  it('check the proxy form before the server does', () => {
+    const others = [inbound({ id: 'b', proxy_port: 1080 })];
+    expect(proxyErrors(draft({ port: '1081' }), null, others)).toEqual({});
+    expect(proxyErrors(draft(), inbound({ id: 'b' }), others)).toEqual({});
+    expect(proxyErrors(draft(), null, others).proxy_port).toBe('Another inbound uses this port.');
+    for (const port of ['', '0', '65536', '10.5', 'x']) {
+      expect(proxyErrors(draft({ port }), null, []).proxy_port).toBeDefined();
+    }
+    expect(proxyErrors(draft({ listen: LISTEN_OTHER }), null, []).proxy_listen).toBeDefined();
+    const auth = draft({ auth: true, username: 'a:b' });
+    expect(Object.keys(proxyErrors(auth, null, []))).toEqual(['proxy_username', 'proxy_password']);
+    // A stored password is kept when the field is empty.
+    const stored = inbound({ proxy_username: 'alice' });
+    expect(proxyErrors(draft({ auth: true, username: 'bob' }), stored, [])).toEqual({});
+  });
+
+  it('send all settings of a new proxy and only the changed ones of a stored proxy', () => {
+    expect(proxySettings(draft({ auth: true, username: ' alice ', password: 'p' }), null)).toEqual({
+      proxy_listen: '127.0.0.1',
+      proxy_port: 1080,
+      proxy_username: 'alice',
+      proxy_password: 'p',
+    });
+    const stored = inbound({ proxy_username: 'alice' });
+    const unchanged = proxyDraft(stored, []);
+    expect(proxySettings(unchanged, stored)).toEqual({});
+    expect(proxySettings({ ...unchanged, password: 'new' }, stored)).toEqual({
+      proxy_password: 'new',
+    });
+    expect(proxySettings({ ...unchanged, listen: '0.0.0.0', port: '1081' }, stored)).toEqual({
+      proxy_listen: '0.0.0.0',
+      proxy_port: 1081,
+    });
+    expect(proxySettings({ ...unchanged, auth: false }, stored)).toEqual({
+      proxy_username: null,
+      proxy_password: null,
+    });
+  });
+
+  it('warn about a proxy open to the network', () => {
+    expect(proxyOpen(draft())).toBe(false);
+    expect(proxyOpen(draft({ listen: '0.0.0.0' }))).toBe(true);
+    expect(proxyOpen(draft({ listen: '0.0.0.0', auth: true }))).toBe(false);
+    expect(proxyOpen(draft({ listen: LISTEN_OTHER }))).toBe(false);
+    expect(proxyOpen(draft({ listen: LISTEN_OTHER, address: '::1' }))).toBe(false);
+  });
+});
+
+describe('routing', () => {
+  const rules = [{ id: 'r1', priority: 1, reg: '*.youtube.com', action: 'proxy' }];
+
+  it('normalize patterns as the server keeps them', () => {
+    expect(normalizedPattern(' *.YouTube.com ')).toBe('*.youtube.com');
+    expect(normalizedPattern('a***b')).toBe('a*b');
+  });
+
+  it('accept the patterns the server accepts', () => {
+    for (const reg of ['youtube.com', '*google*', 'my_host-1', '192.168.*', '10.*', '1.2.3.4']) {
+      expect(routingPatternError(reg, rules), reg).toBeNull();
+    }
+    for (const reg of ['*', '::1', '2001:DB8::1', '0.0.0.0', '255.255.255.*']) {
+      expect(routingPatternError(reg, rules), reg).toBeNull();
+    }
+  });
+
+  it('reject the patterns the server rejects', () => {
+    const ip = 'In an IP address * replaces whole numbers at the end, e.g. 192.168.*';
+    for (const reg of [
+      '192.16*',
+      '192.*.1.1',
+      '*.1',
+      '256.1.1.1',
+      '01.2.3.4',
+      '1.2.3',
+      '1.2.3.4.*',
+    ]) {
+      expect(routingPatternError(reg, rules), reg).toBe(ip);
+    }
+    for (const reg of ['you tube.com', 'пример.рф', 'a/b', 'a?']) {
+      expect(routingPatternError(reg, rules), reg).toContain('Latin letters');
+    }
+    expect(routingPatternError('fe80::*', rules)).toContain('IPv6');
+    expect(routingPatternError('  ', rules)).not.toBeNull();
+  });
+
+  it('reject a pattern of another rule, as the server compares them', () => {
+    expect(routingPatternError('*.YouTube.com', rules)).toContain('already exists');
+    expect(routingPatternError('**.youtube.com', rules)).toContain('already exists');
+    expect(routingPatternError('*.youtube.com', rules, 'r1')).toBeNull();
+  });
+
+  it('find the rule that catches everything', () => {
+    expect(catchAllIndex(rules)).toBe(-1);
+    expect(catchAllIndex([...rules, { id: 'r2', priority: 2, reg: '*', action: 'direct' }])).toBe(
+      1,
+    );
+  });
+
+  it('label actions, new ones as is', () => {
+    expect(actionInfo('direct').label).toBe('Direct');
+    expect(actionInfo('reroute')).toEqual({ label: 'reroute', tone: 'neutral', text: 'reroute' });
   });
 });

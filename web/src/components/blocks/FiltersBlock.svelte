@@ -18,15 +18,13 @@
   icon="filter"
   {order}
   meta={loading ? undefined : String(regFilters.list.length)}
-  hint="Servers whose names match any of these regular expressions are filtered: grayed out at the end of the server list, they cannot be connected and are not checked. Python syntax, found anywhere in the name, case sensitive. Start with (?i) to ignore case, wrap in ^…$ to match the whole name."
+  hint="Servers whose names match any of these patterns are filtered: grayed out at the end of the server list, they cannot be connected and are not checked. A pattern matches the whole name, ignoring case; * stands for any characters: *RU* finds RU anywhere in the name, RU* only at its start."
 >
   {#if loading}
     <EmptyState compact loading title="Loading…" />
   {:else}
     {#if regFilters.list.length === 0}
-      <p class="muted small" title="Add a regular expression to filter servers by name.">
-        No filters
-      </p>
+      <p class="muted small" title="Add a pattern to filter servers by name.">No filters</p>
     {:else}
       <ul class="list">
         {#each regFilters.list as filter (filter.id)}

@@ -123,3 +123,12 @@ npm run format:check  # стиль (Prettier); npm run format — исправи
 на модель сервера, `src/components` — UI-примитивы (`ui`), каркас страницы (`layout`)
 и блоки интерфейса (`blocks`). Цвета, отступы и шрифты заданы переменными в
 `src/styles/tokens.css`.
+
+Новый inbound добавляется в два шага: сначала тип, потом его настройки. Чтобы
+добавить тип, нужно:
+
+- описать его в `INBOUND_TYPES` и `InboundDraft` в `src/lib/inbounds.ts` с проверками и
+  полями запроса;
+- сделать компонент настроек рядом с `ProxyFields`
+  (`src/components/blocks/inbounds`);
+- показать этот компонент в `InboundForm`.

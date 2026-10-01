@@ -38,7 +38,7 @@ export interface SubscriptionLink {
 
 export interface RegFilter {
   id: string;
-  /** Python regular expression searched anywhere in server names, case sensitive. */
+  /** A pattern (* is any characters) matched with the whole server name, ignoring case. */
   reg: string;
 }
 
@@ -85,6 +85,45 @@ export interface OutboundServer {
   is_connected: boolean;
 }
 
+export type InboundType = Open<'proxy'>;
+
+/** Where the core accepts traffic; fields prefixed with a type are null for other types. */
+export interface InboundServer {
+  id: string;
+  /** Cannot change after the inbound is added. */
+  type: InboundType;
+  /** false: kept, but the core does not listen. */
+  enabled: boolean;
+  /** IP address; 0.0.0.0 or :: accept connections from the network. */
+  proxy_listen: string | null;
+  proxy_port: number | null;
+  /** null: no authentication. The password is secret and never sent to clients. */
+  proxy_username: string | null;
+  /** Why the core does not listen; null while it listens or is disabled. */
+  error: string | null;
+}
+
+/** Inbound fields a client sets; username and password are set or removed together. */
+export interface InboundSettings {
+  enabled?: boolean;
+  proxy_listen?: string;
+  proxy_port?: number;
+  proxy_username?: string | null;
+  proxy_password?: string | null;
+}
+
+/** proxy: through the connected server; direct: without a server; block: closed at once. */
+export type RoutingAction = Open<'proxy' | 'direct' | 'block'>;
+
+export interface RoutingRule {
+  id: string;
+  /** 1 is checked first; the rules are numbered 1..N without gaps. */
+  priority: number;
+  /** A pattern of a domain or an IP address, stored in lower case. */
+  reg: string;
+  action: RoutingAction;
+}
+
 export type TaskId = Open<'refresh_subscriptions' | 'test_outbound_servers'>;
 
 export interface Task {
@@ -97,6 +136,8 @@ export interface Models {
   subscription_link: SubscriptionLink;
   reg_filter: RegFilter;
   outbound_server: OutboundServer;
+  inbound_server: InboundServer;
+  routing_rule: RoutingRule;
   task: Task;
 }
 
@@ -107,6 +148,8 @@ export const MODEL_NAMES: readonly ModelName[] = [
   'subscription_link',
   'reg_filter',
   'outbound_server',
+  'inbound_server',
+  'routing_rule',
   'task',
 ];
 
@@ -158,6 +201,21 @@ export interface Requests {
   'delete/subscription_link': { payload: { id: string }; result: Empty };
   'add/reg_filter': { payload: { reg: string }; result: { id: string } };
   'delete/reg_filter': { payload: { id: string }; result: Empty };
+  'add/inbound_server': {
+    payload: { type: InboundType } & InboundSettings;
+    result: { id: string };
+  };
+  'change/inbound_server': { payload: { id: string } & InboundSettings; result: Empty };
+  'delete/inbound_server': { payload: { id: string }; result: Empty };
+  'add/routing_rule': {
+    payload: { reg: string; action: RoutingAction; priority?: number };
+    result: { id: string };
+  };
+  'change/routing_rule': {
+    payload: { id: string; priority?: number; reg?: string; action?: RoutingAction };
+    result: Empty;
+  };
+  'delete/routing_rule': { payload: { id: string }; result: Empty };
   'change/server_settings': {
     payload: {
       id: 0;
