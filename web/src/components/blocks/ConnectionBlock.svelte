@@ -17,7 +17,6 @@
     subscriptionLinks,
   } from '../../lib/stores';
   import Block from '../layout/Block.svelte';
-  import Badge from '../ui/Badge.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import Stat from '../ui/Stat.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
@@ -86,11 +85,6 @@
           {subscriptionLinks.label(server.subscription_id)}
         </Tag>
         <span class="stack">{stackLabel(server)}</span>
-        {#if autoConnect}
-          <Badge tone="accent" title="Auto-connect is on and may switch to another server"
-            >Auto</Badge
-          >
-        {/if}
       </p>
     </div>
     <dl class="stats">
