@@ -1,10 +1,10 @@
 # Серверное приложение
 
-Запуск из корня проекта:
+Запуск из корня проекта; переменные окружения описаны в корневом `README.md`:
 
 ```sh
 uv sync --locked
-uv run python -m server.main
+XPR_UI_HOST=127.0.0.1 XPR_UI_PORT=20800 XPR_DATA_DIR="$PWD" uv run python -m server.main
 ```
 
 `main.py` создаёт приложение и ждёт завершения по Ctrl+C, SIGTERM или SIGHUP

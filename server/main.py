@@ -1,4 +1,4 @@
-"""Run with python -m server.main from the project root."""
+"""Run with python -m server.main from the project root, with the environment from README.md."""
 
 import asyncio
 import json
