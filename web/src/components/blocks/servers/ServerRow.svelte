@@ -116,12 +116,12 @@
 
 <style>
   /* A subscription brings hundreds of rows: the browser lays out and draws only those
-     near the visible part, which takes a third of the page's memory less. The height
-     of a row not drawn yet is that of a collapsed one, the line and the border. */
+     near the visible part, and a long list takes half the memory. A row not drawn yet
+     is as high as a collapsed one: the line, and the border added to this height. */
   .row {
     border-top: 1px solid var(--color-border);
     content-visibility: auto;
-    contain-intrinsic-size: auto 33px;
+    contain-intrinsic-size: auto 32px;
   }
 
   /* The details below the line are part of the row: one background for both. */
