@@ -3,14 +3,16 @@
 import asyncio
 import json
 import logging
+import os
 import signal
 import sqlite3
 import sys
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC
 from functools import partial
 from inspect import iscoroutinefunction
+from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -72,6 +74,7 @@ log = logging.getLogger(__name__)
 TEST_PORT = 20809
 
 # Clients connect to ws://WEBSOCKET_HOST:WEBSOCKET_PORT/ws (server/PROTOCOL.md).
+# The environment variables XPR_UI_HOST and XPR_UI_PORT replace them at startup, e.g. in Docker.
 WEBSOCKET_HOST = "127.0.0.1"
 WEBSOCKET_PORT: int = 20800
 WEBSOCKET_PATH = "/ws"
@@ -86,19 +89,57 @@ WEBSOCKET_MAX_MESSAGE_SIZE = 1024 * 1024
 WEB_CLIENT_DIR: Path | None = Path(__file__).resolve().parent.parent / "web" / "dist"
 
 
-def origin_allowed(origin: str | None) -> bool:
+def ui_address(environ: Mapping[str, str]) -> tuple[str, int]:
+    """Host and port of the web interface: XPR_UI_HOST and XPR_UI_PORT, or the defaults.
+
+    The host is an IP address or localhost. Invalid values raise ValueError with a
+    message for the user.
+    """
+    host = environ.get("XPR_UI_HOST", "").strip() or WEBSOCKET_HOST
+    if host != "localhost":
+        try:
+            ip_address(host)
+        except ValueError:
+            raise ValueError(
+                f"XPR_UI_HOST must be an IP address, e.g. 0.0.0.0 or 127.0.0.1, not {host!r}"
+            ) from None
+    value = environ.get("XPR_UI_PORT", "").strip()
+    if not value:
+        return host, WEBSOCKET_PORT
+    port = int(value) if value.isdecimal() else 0
+    if not 1 <= port <= 65535:
+        raise ValueError(f"XPR_UI_PORT must be a port from 1 to 65535, not {value!r}")
+    return host, port
+
+
+def is_loopback(host: str) -> bool:
+    """Whether a listener on host is reachable only from this computer."""
+    try:
+        return host == "localhost" or ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def origin_allowed(origin: str | None, host: str | None = None) -> bool:
     """Whether a WebSocket connection with this Origin header may control the server.
 
     Browsers let any page connect to a local WebSocket and send the page's origin,
     so only local pages are accepted. Clients that are not browsers (the Electron
     main process, scripts) send no Origin and are accepted.
+
+    host is the Host header of a request to a server open to the network: its own
+    pages are accepted at any address it is opened at, e.g. http://192.168.1.2:20800.
     """
     if origin is None:
         return True
     if origin in WEBSOCKET_ALLOWED_ORIGINS:
         return True
     parts = urlsplit(origin)
-    return parts.scheme in ("http", "https") and parts.hostname in _LOCAL_HOSTS
+    if parts.scheme not in ("http", "https"):
+        return False
+    if parts.hostname in _LOCAL_HOSTS:
+        return True
+    return host is not None and parts.netloc.lower() == host.lower()
 
 
 AsyncHandler = Callable[[], Awaitable[object]]
@@ -207,6 +248,8 @@ class WebSocketServer:
         self._requests: set[asyncio.Task] = set()
         self._runner: web.AppRunner | None = None
         self._sockets: set[web.WebSocketResponse] = set()
+        # Listening on an address reachable from other computers; see origin_allowed().
+        self._network = False
         # The listening port while started; useful when started on port 0.
         self.port: int | None = None
 
@@ -410,6 +453,7 @@ class WebSocketServer:
             await runner.cleanup()
             raise
         self._runner = runner
+        self._network = not is_loopback(host)
         self.port = runner.addresses[0][1]
         log.info("WebSocket server listening on ws://%s:%s%s", host, self.port, WEBSOCKET_PATH)
         if static_dir is not None:
@@ -429,7 +473,8 @@ class WebSocketServer:
     async def _serve(self, request: web.Request) -> web.StreamResponse:
         """One WebSocket connection: text frames are requests, sent messages go out."""
         origin = request.headers.get("Origin")
-        if not origin_allowed(origin):
+        host = request.headers.get("Host") if self._network else None
+        if not origin_allowed(origin, host):
             log.warning("Rejected WebSocket connection from origin %s", origin)
             return web.Response(status=403, text="Origin is not allowed")
         socket = web.WebSocketResponse(
@@ -583,4 +628,8 @@ if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
+    try:
+        WEBSOCKET_HOST, WEBSOCKET_PORT = ui_address(os.environ)
+    except ValueError as error:
+        sys.exit(str(error))
     asyncio.run(main())

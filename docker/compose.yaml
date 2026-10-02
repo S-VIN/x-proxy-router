@@ -1,0 +1,24 @@
+# The settings come from .env next to this file (see .env.example):
+#   docker compose pull && docker compose up -d
+name: x-proxy-router
+
+services:
+  x-proxy-router:
+    # Built by the "Docker image" workflow on GitHub (.github/workflows/docker.yml).
+    image: ghcr.io/s-vin/x-proxy-router:latest
+    container_name: x-proxy-router
+    restart: unless-stopped
+    # Inbounds added in the web interface listen right on the server, at any
+    # port and with UDP, without publishing ports here.
+    network_mode: host
+    environment:
+      XPR_UI_HOST: ${XPR_UI_HOST:-0.0.0.0}
+      XPR_UI_PORT: ${XPR_UI_PORT:?Set XPR_UI_PORT in .env}
+    volumes:
+      - ${XPR_DATA_DIR:?Set XPR_DATA_DIR in .env}:/data
+    # Mihomo logs every connection.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
