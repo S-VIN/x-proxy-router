@@ -1,0 +1,15 @@
+# Only what the image is built from goes to the build; the rest, including
+# settings.sqlite3, subscription_links.txt and .env files, stays out.
+*
+!pyproject.toml
+!uv.lock
+!resources/mihomo/LICENSE
+!resources/mihomo/linux/
+!server/
+!web/
+
+**/__pycache__/
+**/*.py[cod]
+server/tests/
+web/node_modules/
+web/dist/

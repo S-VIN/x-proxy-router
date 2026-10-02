@@ -7,3 +7,6 @@ __pycache__/
 subscription_links.txt
 settings.sqlite3
 settings.sqlite3-*
+
+# Settings of the Docker deployment
+docker/.env

@@ -3,13 +3,21 @@ import json
 import socket
 import unittest
 from contextlib import chdir
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
 
 from aiohttp import ClientSession, WSMsgType, WSServerHandshakeError
 
 from server.cores.core_client import CoreClient
-from server.main import WebSocketServer, application, configure_handlers, origin_allowed
+from server.main import (
+    WebSocketServer,
+    application,
+    configure_handlers,
+    is_loopback,
+    origin_allowed,
+    read_environment,
+)
 from server.models.application_context import ApplicationContext
 from server.tests.support import startup_finished
 
@@ -35,6 +43,60 @@ class OriginTests(unittest.TestCase):
             self.assertFalse(origin_allowed(origin), origin)
         with patch("server.main.WEBSOCKET_ALLOWED_ORIGINS", frozenset({"app://x-proxy-router"})):
             self.assertTrue(origin_allowed("app://x-proxy-router"))
+
+    def test_server_open_to_the_network_accepts_its_own_pages(self):
+        self.assertTrue(origin_allowed("http://192.168.1.2:20800", "192.168.1.2:20800"))
+        self.assertTrue(origin_allowed("https://Router.Example", "router.example"))
+        self.assertTrue(origin_allowed("http://localhost:5173", "192.168.1.2:20800"))
+        for origin, host in (
+            ("https://evil.example", "192.168.1.2:20800"),
+            ("http://192.168.1.2:8080", "192.168.1.2:20800"),
+            ("app://192.168.1.2:20800", "192.168.1.2:20800"),
+            ("null", "null"),
+            ("http://192.168.1.2:20800", None),
+        ):
+            self.assertFalse(origin_allowed(origin, host), (origin, host))
+
+
+class EnvironmentTests(unittest.TestCase):
+    DATA = str(Path("data").resolve())
+
+    def test_required_values_and_default_host(self):
+        self.assertEqual(
+            read_environment({"XPR_UI_PORT": "20800", "XPR_DATA_DIR": self.DATA}),
+            ("0.0.0.0", 20800, Path(self.DATA)),
+        )
+        for host in ("127.0.0.1", "::", "localhost"):
+            environ = {"XPR_UI_HOST": host, "XPR_UI_PORT": " 8080 ", "XPR_DATA_DIR": self.DATA}
+            self.assertEqual(read_environment(environ), (host, 8080, Path(self.DATA)))
+
+    def test_missing_and_invalid_values_are_named(self):
+        valid = {"XPR_UI_PORT": "20800", "XPR_DATA_DIR": self.DATA}
+        for changes, name in (
+            ({"XPR_UI_PORT": ""}, "Set XPR_UI_PORT"),
+            ({"XPR_UI_PORT": "0"}, "XPR_UI_PORT must"),
+            ({"XPR_UI_PORT": "65536"}, "XPR_UI_PORT must"),
+            ({"XPR_UI_PORT": "-1"}, "XPR_UI_PORT must"),
+            ({"XPR_UI_PORT": "http"}, "XPR_UI_PORT must"),
+            ({"XPR_DATA_DIR": " "}, "Set XPR_DATA_DIR"),
+            ({"XPR_DATA_DIR": "data"}, "XPR_DATA_DIR must be an absolute path"),
+            ({"XPR_UI_HOST": "router.example"}, "XPR_UI_HOST must"),
+            ({"XPR_UI_HOST": "0.0.0.0:20800"}, "XPR_UI_HOST must"),
+        ):
+            with self.assertRaisesRegex(ValueError, name):
+                read_environment(valid | changes)
+        with self.assertRaises(ValueError) as raised:
+            read_environment({})
+        self.assertEqual(
+            [line.split(",")[0] for line in str(raised.exception).splitlines()],
+            ["Set XPR_UI_PORT", "Set XPR_DATA_DIR"],
+        )
+
+    def test_loopback(self):
+        for host in ("127.0.0.1", "127.0.0.2", "::1", "localhost"):
+            self.assertTrue(is_loopback(host), host)
+        for host in ("0.0.0.0", "::", "192.168.1.2"):
+            self.assertFalse(is_loopback(host), host)
 
 
 class TransportTests(unittest.IsolatedAsyncioTestCase):
@@ -178,6 +240,33 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
     async def test_second_start_is_rejected(self):
         with self.assertRaises(RuntimeError):
             await self.context.websocket.start("127.0.0.1", 0)
+
+
+class NetworkOriginTests(unittest.IsolatedAsyncioTestCase):
+    """A page of the server opened at its address in the network may connect."""
+
+    async def connect(self, listen: str, origin: str, host: str) -> int:
+        server = WebSocketServer()
+        await server.start(listen, 0)
+        self.addAsyncCleanup(server.close)
+        async with ClientSession() as session:
+            try:
+                ws = await session.ws_connect(
+                    f"ws://127.0.0.1:{server.port}/ws", origin=origin, headers={"Host": host}
+                )
+            except WSServerHandshakeError as error:
+                return error.status
+            await ws.close()
+            return 101
+
+    async def test_own_page_is_accepted_only_when_open_to_the_network(self):
+        page = "http://router.example:20800"
+        self.assertEqual(await self.connect("0.0.0.0", page, "router.example:20800"), 101)
+        with self.assertLogs("server.main", level="WARNING"):
+            self.assertEqual(await self.connect("0.0.0.0", page, "evil.example:20800"), 403)
+        # DNS rebinding: a site whose name now points to 127.0.0.1 looks like the server's own.
+        with self.assertLogs("server.main", level="WARNING"):
+            self.assertEqual(await self.connect("127.0.0.1", page, "router.example:20800"), 403)
 
 
 class PortTests(unittest.IsolatedAsyncioTestCase):
