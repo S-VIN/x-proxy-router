@@ -1,0 +1,149 @@
+name: Desktop application
+
+# Started by hand only: Actions -> Desktop application -> Run workflow, on the chosen branch.
+# Every job builds the packages of one OS and architecture on a computer of that
+# kind and attaches them to the run as an artifact (electron/README.md).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            runner: ubuntu-24.04
+            os: linux
+            arch: x64
+            unpacked: linux-unpacked
+          - name: Linux arm64
+            runner: ubuntu-24.04-arm
+            os: linux
+            arch: arm64
+            unpacked: linux-arm64-unpacked
+          - name: Windows x64
+            runner: windows-latest
+            os: win
+            arch: x64
+            unpacked: win-unpacked
+          - name: Windows arm64
+            runner: windows-11-arm
+            os: win
+            arch: arm64
+            unpacked: win-arm64-unpacked
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            electron/package-lock.json
+
+      - uses: astral-sh/setup-uv@v10
+
+      # Flatpak for the package, the libraries Electron needs and a display for the checks.
+      - name: Linux tools
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder xvfb dbus-daemon \
+            libgtk-3-0t64 libnss3 libasound2t64 libgbm1
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          # Ubuntu does not let unprivileged programs make sandboxes, which Flatpak needs.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Web client
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Checks
+        working-directory: electron
+        run: |
+          npm ci
+          npm run check
+          npm test
+
+      - name: Icons and the main process
+        working-directory: electron
+        run: |
+          npm run icons
+          npm run build
+
+      # Python, the packages of uv.lock, the server and the core of this platform.
+      - name: Server
+        working-directory: electron
+        run: npm run backend -- --os ${{ matrix.os }} --arch ${{ matrix.arch }}
+
+      # The targets of this OS from electron-builder.yml.
+      - name: Packages
+        working-directory: electron
+        env:
+          # The log of the Flatpak build, which is silent otherwise.
+          DEBUG: '@malept/flatpak-bundler'
+        run: npm run dist -- --${{ matrix.arch }}
+
+      # The packaged application starts its server and core and shows the interface.
+      - name: Check the application (Linux)
+        if: matrix.os == 'linux'
+        working-directory: electron
+        run: |
+          export XPR_DESKTOP_DATA_DIR="$RUNNER_TEMP/unpacked"
+          xvfb-run -a "release/${{ matrix.unpacked }}/x-proxy-router" --smoke-test --no-sandbox \
+            || { cat "$XPR_DESKTOP_DATA_DIR/logs/server.log"; exit 1; }
+
+      - name: Check the AppImage
+        if: matrix.os == 'linux'
+        working-directory: electron
+        env:
+          # The runner has no FUSE to mount the image.
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: |
+          export XPR_DESKTOP_DATA_DIR="$RUNNER_TEMP/appimage"
+          chmod +x release/*.AppImage
+          xvfb-run -a release/*.AppImage --smoke-test --no-sandbox \
+            || { cat "$XPR_DESKTOP_DATA_DIR/logs/server.log"; exit 1; }
+
+      - name: Check the Flatpak
+        if: matrix.os == 'linux'
+        working-directory: electron
+        run: |
+          flatpak install --user -y release/*.flatpak
+          dbus-run-session -- xvfb-run -a \
+            flatpak run io.github.s_vin.x_proxy_router --smoke-test --no-sandbox \
+            || { cat ~/.var/app/io.github.s_vin.x_proxy_router/config/x-proxy-router/logs/server.log; exit 1; }
+
+      - name: Check the application (Windows)
+        if: matrix.os == 'win'
+        working-directory: electron
+        shell: pwsh
+        run: |
+          $env:XPR_DESKTOP_DATA_DIR = "$env:RUNNER_TEMP\unpacked"
+          $process = Start-Process -FilePath "release\${{ matrix.unpacked }}\X Proxy Router.exe" `
+            -ArgumentList "--smoke-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            Get-Content "$env:XPR_DESKTOP_DATA_DIR\logs\server.log" -ErrorAction SilentlyContinue
+            exit 1
+          }
+
+      # Kept when a check fails, to look at what was built.
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: x-proxy-router-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            electron/release/*.exe
+            electron/release/*.AppImage
+            electron/release/*.flatpak
+          if-no-files-found: error

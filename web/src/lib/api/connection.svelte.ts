@@ -8,8 +8,9 @@ import {
   type ServerMessage,
   type SubscriptionMessage,
 } from './protocol';
+import type { ConnectionStatus } from './status';
 
-export type ConnectionStatus = 'connecting' | 'online' | 'offline';
+export type { ConnectionStatus };
 
 export type SocketFactory = (url: string) => WebSocket;
 

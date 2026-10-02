@@ -1,0 +1,7 @@
+node_modules/
+# The bundled main process and the icons made from the logo (npm run build, npm run icons).
+dist/
+# Generated for electron-builder: icons and the server with its Python (npm run backend).
+build/
+# Installers and packages (npm run dist).
+release/

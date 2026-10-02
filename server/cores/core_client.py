@@ -5,6 +5,7 @@ import errno
 import re
 import socket
 from abc import ABC, abstractmethod
+from collections.abc import Collection
 from contextlib import suppress
 from ipaddress import ip_address
 
@@ -143,8 +144,12 @@ class CoreClient(ABC):
         ...
 
     @abstractmethod
-    async def service_start(self, test_port: int) -> None:
-        """Start the core with the test endpoint only: no inbounds, servers or routing rules."""
+    async def service_start(self, reserved_ports: Collection[int] = ()) -> None:
+        """Start the core with the test endpoint only: no inbounds, servers or routing rules.
+
+        The test endpoint takes a free port, never one of reserved_ports: pass the
+        ports the inbounds will listen on.
+        """
         ...
 
     @abstractmethod

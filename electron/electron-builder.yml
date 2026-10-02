@@ -1,0 +1,73 @@
+# Packages of the desktop application; the "Desktop application" workflow runs
+# electron-builder on a computer of each OS and architecture (README.md).
+appId: io.github.s_vin.x_proxy_router
+productName: X Proxy Router
+copyright: Copyright © 2026 S-VIN
+
+directories:
+  output: release
+  buildResources: build
+
+# dist: the bundled main process and the icons it loads (npm run build, npm run icons).
+files:
+  - dist/main.cjs
+  - dist/assets/**
+  - package.json
+asar: true
+
+# The server with its Python and the core of the target platform
+# (scripts/prepare-backend.py): process.resourcesPath/backend.
+extraResources:
+  - from: build/backend/${os}-${arch}
+    to: backend
+
+win:
+  target:
+    - nsis
+    - portable
+  icon: build/icon.png
+
+# No questions: installs for the current user, without administrator rights.
+nsis:
+  oneClick: true
+  perMachine: false
+  # Uninstalling removes the settings and the autostart entry (installer.nsh).
+  deleteAppDataOnUninstall: true
+  include: installer.nsh
+  artifactName: x-proxy-router-${version}-windows-${arch}-setup.${ext}
+
+# One exe that runs without installation and keeps its data next to itself.
+portable:
+  artifactName: x-proxy-router-${version}-windows-${arch}-portable.${ext}
+
+linux:
+  target:
+    - AppImage
+    - flatpak
+  executableName: x-proxy-router
+  # The desktop entry is named after desktopName of package.json, which Electron uses
+  # as the window's application id: the desktop then shows the icon of the entry.
+  syncDesktopName: true
+  icon: build/icons
+  category: Network
+  synopsis: Runs and configures the Mihomo core
+  artifactName: x-proxy-router-${version}-linux-${arch}.${ext}
+
+flatpak:
+  runtime: org.freedesktop.Platform
+  runtimeVersion: '25.08'
+  sdk: org.freedesktop.Sdk
+  base: org.electronjs.Electron2.BaseApp
+  baseVersion: '25.08'
+  finishArgs:
+    # The window.
+    - --socket=wayland
+    - --socket=fallback-x11
+    - --share=ipc
+    - --device=dri
+    # The inbounds listen on the ports of the computer, the core connects to the servers.
+    - --share=network
+    # The tray icon.
+    - --talk-name=org.kde.StatusNotifierWatcher
+    # "Launch at login" writes a desktop entry there (src/autostart.ts).
+    - --filesystem=xdg-config/autostart:create

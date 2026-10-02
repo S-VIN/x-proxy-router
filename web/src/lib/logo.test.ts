@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import favicon from '../../public/favicon.svg?raw';
+import { linkDescription, linkState } from './linkState';
 import { logoSvg, logoUrl } from './logo';
-import { linkState } from './stores/linkStatus.svelte';
 
 describe('linkState', () => {
   const server = (rating: number | null) => ({ rating });
@@ -21,6 +21,15 @@ describe('linkState', () => {
   it('is none when no server is connected', () => {
     expect(linkState('online', null, false)).toBe('none');
     expect(linkState('connecting', null, false)).toBe('none');
+  });
+
+  it('is described for each case', () => {
+    const named = (rating: number | null) => ({ name: 'Berlin', rating });
+    expect(linkDescription('offline', named(80), false)).toMatch(/^No connection/);
+    expect(linkDescription('online', named(0), false)).toBe('Berlin failed its last check');
+    expect(linkDescription('online', named(80), false)).toBe('Traffic goes through Berlin');
+    expect(linkDescription('online', null, true)).toMatch(/removed/);
+    expect(linkDescription('online', null, false)).toBe('No server is connected');
   });
 });
 

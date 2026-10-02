@@ -17,7 +17,7 @@ from server.cores.core_client import CoreClient, InboundError
 from server.handlers.auto_connect import RETRY_INTERVAL, watch_connected_server
 from server.handlers.outbound_test import test_outbound_servers
 from server.handlers.subscriptions import refresh_subscriptions
-from server.main import TEST_PORT, WebSocketServer, application, configure_handlers
+from server.main import WebSocketServer, application, configure_handlers
 from server.models.application_context import ApplicationContext
 from server.models.inbound_server import DEFAULT_PROXY_PORT, InboundServer, InboundType
 from server.models.outbound_server import OutboundProtocol, OutboundServer
@@ -137,7 +137,8 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(Path("settings.sqlite3").is_file())
                 self.assertIs(context.settings, SettingsStore())
                 self.assertIs(context.core_client, self.core)
-                self.core.service_start.assert_awaited_once_with(TEST_PORT)
+                # The test endpoint must not take the port of the stored inbound.
+                self.core.service_start.assert_awaited_once_with({DEFAULT_PROXY_PORT})
                 self.core.outbound_register.assert_awaited_once_with([])
                 raise RuntimeError("handler failure")
         self.core.service_stop.assert_awaited_once()

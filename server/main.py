@@ -7,6 +7,7 @@ import os
 import signal
 import sqlite3
 import sys
+import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC
@@ -72,10 +73,6 @@ from .tasks import TaskCancelled, TaskRegistry
 
 log = logging.getLogger(__name__)
 
-# SOCKS5 listener of the core on 127.0.0.1 for server checks. Listeners for
-# traffic are inbounds stored in the database (handlers/inbound_server.py).
-TEST_PORT = 20809
-
 # Clients connect to ws://WEBSOCKET_HOST:WEBSOCKET_PORT/ws (server/PROTOCOL.md).
 # Running main.py takes them from XPR_UI_HOST and XPR_UI_PORT (read_environment).
 WEBSOCKET_HOST = "127.0.0.1"
@@ -125,6 +122,16 @@ def read_environment(environ: Mapping[str, str]) -> tuple[str, int, Path]:
     if errors:
         raise ValueError("\n".join(errors))
     return host, port, Path(directory)
+
+
+def stops_with_stdin(environ: Mapping[str, str]) -> bool:
+    """Whether XPR_STOP_ON_STDIN_CLOSE=1 asks to stop when standard input closes.
+
+    The desktop application sets it and keeps a pipe to standard input: it closes
+    the pipe to stop the server, and the pipe closes by itself if the application
+    dies. Windows has no signal that would let the server stop in order.
+    """
+    return environ.get("XPR_STOP_ON_STDIN_CLOSE", "").strip() == "1"
 
 
 def is_loopback(host: str) -> bool:
@@ -548,7 +555,14 @@ async def application() -> AsyncIterator[ApplicationContext]:
         init_task = None
         try:
             scheduler.start()
-            await core_client.service_start(TEST_PORT)
+            # The core's test endpoint takes a free port, but not a port of a stored inbound.
+            await core_client.service_start(
+                {
+                    inbound.proxy_port
+                    for inbound in settings.inbound_server.get_all()
+                    if inbound.proxy_port is not None
+                }
+            )
             # Before the inbounds, so their traffic follows the rules from the start.
             await apply_routing_rules(context)
             await start_inbound_servers(context)
@@ -617,12 +631,38 @@ def configure_handlers(context: ApplicationContext) -> None:
     )
 
 
-async def main() -> None:
+def _wait_closed(descriptor: int) -> None:
+    """Block until the other end of the pipe is closed; what it writes is ignored."""
+    try:
+        # os.read, not sys.stdin: a thread blocked in a buffered read breaks the exit of Python.
+        while os.read(descriptor, 4096):
+            pass
+    except OSError:
+        pass
+
+
+async def main(*, stop_on_stdin_close: bool = False) -> None:
+    """Run the application until a signal or, with stop_on_stdin_close, the end of stdin."""
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
 
     def request_stop(signum, frame) -> None:
         loop.call_soon_threadsafe(stop.set)
+
+    def watch_stdin(descriptor: int) -> None:
+        _wait_closed(descriptor)
+        log.info("Standard input closed, stopping")
+        try:
+            loop.call_soon_threadsafe(stop.set)
+        except RuntimeError:
+            pass  # The loop is closed: the application has already stopped.
+
+    if stop_on_stdin_close:
+        # A daemon thread: a pipe is not awaitable on Windows, and the thread must
+        # not keep the process when the application stops for another reason.
+        threading.Thread(
+            target=watch_stdin, args=(sys.stdin.fileno(),), name="stdin-watch", daemon=True
+        ).start()
 
     # signal.signal also works on Windows, unlike loop.add_signal_handler.
     # SIGHUP (POSIX only) comes when the terminal running the server closes.
@@ -649,4 +689,4 @@ if __name__ == "__main__":
         WEBSOCKET_HOST, WEBSOCKET_PORT, DATA_DIR = read_environment(os.environ)
     except ValueError as error:
         sys.exit(str(error))
-    asyncio.run(main())
+    asyncio.run(main(stop_on_stdin_close=stops_with_stdin(os.environ)))

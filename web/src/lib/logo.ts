@@ -1,4 +1,4 @@
-import type { LinkState } from './stores/linkStatus.svelte';
+import type { LinkState } from './linkState';
 
 interface LogoColors {
   /** Top and bottom of the face gradient. */

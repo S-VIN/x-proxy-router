@@ -694,7 +694,6 @@ class MihomoCheckTests(ListenerTestCase):
         self.enterContext(patch("server.main.MihomoClient", return_value=self.core))
         # The inbound created with the database listens on this port.
         self.enterContext(patch("server.settings_store.DEFAULT_PROXY_PORT", free_port()))
-        self.enterContext(patch("server.main.TEST_PORT", free_port()))
         self.enterContext(
             patch(
                 "server.handlers.subscriptions.load_subscription",

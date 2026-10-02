@@ -2,6 +2,8 @@
 
 import asyncio
 import socket
+from collections.abc import Collection
+from contextlib import ExitStack
 
 from ...models import CoreState, InboundServer, OutboundServer, RoutingAction, RoutingRule
 from ...models.pattern import WILDCARD
@@ -16,6 +18,8 @@ _ACTION_TARGETS = {
     RoutingAction.DIRECT: "DIRECT",
     RoutingAction.BLOCK: _BLOCKED,
 }
+# Ports the OS may offer before one is free for TCP and UDP and not reserved.
+_FREE_PORT_ATTEMPTS = 20
 
 
 def inbound_config(inbound: InboundServer) -> dict:
@@ -87,11 +91,9 @@ class MihomoClient(CoreClient):
     def check_inbound_config(self, inbound: InboundServer) -> None:
         inbound_config(inbound)
 
-    async def service_start(self, test_port: int) -> None:
-        self._validate_port(test_port)
+    async def service_start(self, reserved_ports: Collection[int] = ()) -> None:
         if self.process_manager.status().state != CoreState.STOPPED:
             raise RuntimeError("Stop the service before starting it again")
-        self._check_port_available(test_port)
 
         try:
             await self.process_manager.start()
@@ -100,11 +102,9 @@ class MihomoClient(CoreClient):
             await self.rest_client.connect(
                 self.process_manager.api_port, self.process_manager.api_secret
             )
-            if self.process_manager.api_port == test_port:
-                raise ValueError("Test port conflicts with the API port")
-            self.test_port = test_port
+            self.test_port = self._free_port({*reserved_ports, self.process_manager.api_port})
             await self.outbound_register([])
-            await self._check_listener(test_port)
+            await self._check_listener(self.test_port)
         except Exception:
             await self.service_stop()
             raise
@@ -253,15 +253,23 @@ class MihomoClient(CoreClient):
             raise RuntimeError("Start the service first")
 
     @staticmethod
-    def _validate_port(port: int) -> None:
-        if type(port) is not int or not 1 <= port <= 65535:
-            raise ValueError("Port must be an integer between 1 and 65535")
-
-    @staticmethod
-    def _check_port_available(port: int) -> None:
-        with socket.socket() as tcp, socket.socket(type=socket.SOCK_DGRAM) as udp:
-            tcp.bind(("127.0.0.1", port))
-            udp.bind(("127.0.0.1", port))
+    def _free_port(excluded: Collection[int]) -> int:
+        """A port on 127.0.0.1 free for TCP and UDP and not one of excluded."""
+        # Rejected ports stay bound until the choice is made, so the OS offers others.
+        with ExitStack() as rejected:
+            for _ in range(_FREE_PORT_ATTEMPTS):
+                tcp = rejected.enter_context(socket.socket())
+                tcp.bind(("127.0.0.1", 0))
+                port = tcp.getsockname()[1]
+                if port in excluded:
+                    continue
+                with socket.socket(type=socket.SOCK_DGRAM) as udp:
+                    try:
+                        udp.bind(("127.0.0.1", port))
+                    except OSError:
+                        continue
+                return port
+        raise MihomoError("No free port for the test endpoint")
 
     @staticmethod
     async def _check_listener(port: int) -> None:

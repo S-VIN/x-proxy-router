@@ -10,6 +10,12 @@ XPR_UI_HOST=127.0.0.1 XPR_UI_PORT=20800 XPR_DATA_DIR="$PWD" uv run python -m ser
 `main.py` создаёт приложение и ждёт завершения по Ctrl+C, SIGTERM или SIGHUP
 (закрытие терминала, только POSIX).
 Обработчики сигналов работают через стандартный `signal.signal`, включая Windows.
+С `XPR_STOP_ON_STDIN_CLOSE=1` сервер так же штатно останавливается, когда закрывается
+его стандартный ввод (`stops_with_stdin`, `main(stop_on_stdin_close=True)`): десктопное
+приложение держит к нему pipe и закрывает его при выходе, а если оно упало, pipe
+закрывает ОС. В Windows другого способа попросить сервер остановиться нет: процесс
+можно только снять. Записанные в pipe данные игнорируются; за закрытием следит
+поток-демон, читающий дескриптор через `os.read`.
 Сигнал завершения контейнера Linux также обрабатывается. Принудительное завершение
 (`kill -9`, падение Python, снятие задачи в Windows) этот порядок остановки не выполняет,
 но ядро не переживает сервер: см. «Остановка» в разделе ядер.
@@ -17,8 +23,8 @@ XPR_UI_HOST=127.0.0.1 XPR_UI_PORT=20800 XPR_DATA_DIR="$PWD" uv run python -m ser
 При запуске открывается `SettingsStore(DATA_DIR)` (БД `settings.sqlite3` в папке
 `XPR_DATA_DIR`), создаётся один `MihomoClient`, запускается планировщик. Затем,
 до того как приложение готово к работе, запускается ядро:
-`service_start(TEST_PORT)` — только тестовый SOCKS5 на `127.0.0.1:20809`
-(константа в `main.py`). Затем `handlers/routing_rule.py`,
+`service_start(ports)` — только тестовый SOCKS5 на свободном порту `127.0.0.1`;
+`ports` — порты сохранённых inbound, их тестовый порт не занимает. Затем `handlers/routing_rule.py`,
 `apply_routing_rules(context)` передаёт ядру правила роутинга из БД (раздел
 «Роутинг»), чтобы трафик inbound с первой секунды шёл по ним; ошибка здесь, как и
 незапустившееся ядро, останавливает запуск. Затем `handlers/inbound_server.py`,
@@ -32,7 +38,7 @@ Inbound, который не запустился (например, порт з
 предупреждение только с id сервера, остальные регистрируются. После регистрации
 тестовый маршрут заблокирован, а основной снова подключается к серверу с
 `is_connected`; в режиме `auto_connect`, если ничего не подключено, затем
-подключается лучший сервер (см. «Автоподключение»). Если ядро не запустилось (например, занят тестовый порт),
+подключается лучший сервер (см. «Автоподключение»). Если ядро не запустилось (например, нет бинарника),
 приложение не запускается, а исключение выходит из `application()`.
 
 Регистрация идёт по сохранённым серверам и не ждёт обновления подписок.
@@ -1367,7 +1373,7 @@ from server.cores.mihomo.mihomo_client import MihomoClient
 from server.models import InboundServer, InboundType, RoutingAction, RoutingRule
 
 client = MihomoClient()
-await client.service_start(test_port=1081)
+await client.service_start(reserved_ports={1080})
 try:
     await client.routing_set(
         [RoutingRule(priority=1, reg="192.168.*", action=RoutingAction.DIRECT)]
@@ -1376,7 +1382,7 @@ try:
     await client.outbound_register([selected_server, candidate_server, another_server])
     await client.outbound_connect(selected_server.id)
     await client.test_connect(candidate_server.id)
-    # Свои HTTP-запросы через SOCKS5 127.0.0.1:1081.
+    # Свои HTTP-запросы через SOCKS5 127.0.0.1:<client.test_port>.
     await client.outbound_connect(another_server.id)
     await client.test_stop()
 finally:
@@ -1392,6 +1398,10 @@ finally:
   проверяет приложение (раздел «Проверка серверов»), а не клиент ядра.
 - Тестовый SOCKS5 слушает только `127.0.0.1`, без аутентификации, с поддержкой UDP;
   он создаётся при запуске, его порт — `test_port` (`None`, пока сервис остановлен).
+  Порт выбирает `service_start(reserved_ports)`: свободный для TCP и UDP порт от ОС,
+  не из `reserved_ports` и не порт API. Поэтому два приложения на одном компьютере
+  друг другу не мешают, а тестовый порт не отнимает порт у сохранённого inbound.
+  Если за 20 попыток такого порта нет — `MihomoError`, ядро остановлено.
   `test_connect` задаёт маршрут, но не выполняет сетевую проверку сервера.
 - `check_inbound_config(inbound)` — синхронная проверка, что ядро соберёт listener
   (`ValueError` для неподдерживаемого типа), без сети и запущенного ядра.
@@ -1435,8 +1445,8 @@ finally:
   соединения не переносятся на другой сервер и не закрываются принудительно.
 - `outbound_disconnect` так же блокирует основной маршрут; `outbound_connect(id)`
   снова его открывает.
-- Тестовый порт фиксируется при `service_start(test_port)`; порты inbound меняет
-  `inbound_set`.
+- Тестовый порт выбирается при `service_start` и не меняется до `service_stop`;
+  порты inbound меняет `inbound_set`.
 - Клиент управляет всем конфигом ядра. Не изменяйте его параллельно через
   REST-клиент. `service_start` требует остановленного сервиса;
   `service_stop` закрывает REST-клиент и останавливает процесс.

@@ -94,7 +94,7 @@ class MihomoConfigTests(unittest.TestCase):
 class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_register_and_delete_servers(self):
         c = self.client
-        await c.service_start(free_port())
+        await c.service_start()
         first, second = remote(), remote()
         await c.outbound_register([first, second])
         await c.outbound_connect(first.id)
@@ -125,7 +125,7 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_commands_do_not_read_configuration(self):
         c = self.client
-        await c.service_start(free_port())
+        await c.service_start()
         request = c.rest_client.request
 
         async def command_only(method, path, body=None):
@@ -265,7 +265,7 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(c, CoreClient)
         self.assertIsInstance(c.process_manager, CoreProcessManagerInterface)
         first, second = await self.echo_vless(b"main:"), await self.echo_vless(b"test:")
-        await c.service_start(free_port())
+        await c.service_start()
         main = inbound()
         await c.inbound_set(main)
         await c.outbound_register([first, second])
@@ -303,7 +303,7 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_inbounds_keep_routes_and_connections(self):
         c = self.client
         first, second = await self.echo_vless(b"main:"), await self.echo_vless(b"test:")
-        await c.service_start(free_port())
+        await c.service_start()
         main = inbound()
         await c.inbound_set(main)
         await c.outbound_register([first, second])
@@ -343,7 +343,7 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
         c = self.client
         with self.assertRaises(RuntimeError):
             await c.inbound_set(inbound())
-        await c.service_start(free_port())
+        await c.service_start()
         first = remote()
         await c.outbound_register([first])
         await c.outbound_connect(first.id)
@@ -401,7 +401,7 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         c = self.client
         first, second = await endpoint(b"main:"), await endpoint(b"test:")
-        await c.service_start(free_port())
+        await c.service_start()
         main = inbound()
         await c.inbound_set(main)
         await c.outbound_register([first, second])
@@ -424,18 +424,46 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     response = await loop.sock_recv(udp, 1024)
                 self.assertEqual(response[10:], label + b"ping")
 
-    async def test_blocked_start_invalid_ports_and_rejected_config(self):
+    async def test_test_port_is_free_and_not_reserved(self):
         c = self.client
-        with self.assertRaises(ValueError):
-            await c.service_start(False)
+        reserved = free_port()
+        with socket.socket(type=socket.SOCK_DGRAM) as occupied:
+            occupied.bind(("127.0.0.1", 0))
+            taken = occupied.getsockname()[1]
+            offers = iter([reserved, taken])
+            bind = socket.socket.bind
+
+            def offer(sock, address):
+                # The OS offers the reserved port, then the one taken for UDP, then free ones.
+                if sock.type == socket.SOCK_STREAM and address[1] == 0:
+                    address = (address[0], next(offers, 0))
+                bind(sock, address)
+
+            with patch.object(socket.socket, "bind", offer):
+                self.assertNotIn(c._free_port({reserved}), {reserved, taken})
+            self.assertEqual(list(offers), [])
+        with self.assertRaises(MihomoError):
+            c._free_port(range(65536))
+
+        await c.service_start({reserved})
+        assert c.test_port is not None
+        self.assertNotIn(c.test_port, {reserved, c.process_manager.api_port})
+        await c._check_listener(c.test_port)
+        await c.service_stop()
+        self.assertIsNone(c.test_port)
+        failure = MihomoError("No free port")
+        with (
+            patch.object(MihomoClient, "_free_port", side_effect=failure),
+            self.assertRaises(MihomoError),
+        ):
+            await c.service_start()
+        self.assertEqual(c.process_manager.status().state, CoreState.STOPPED)
+
+    async def test_blocked_start_and_rejected_config(self):
+        c = self.client
         with self.assertRaises(RuntimeError):
             await c.test_connect(remote().id)
-        for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
-            with socket.socket(type=kind) as occupied:
-                occupied.bind(("127.0.0.1", 0))
-                with self.assertRaises(OSError):
-                    await c.service_start(occupied.getsockname()[1])
-        await c.service_start(free_port())
+        await c.service_start()
         first = remote()
         await c.outbound_register([first])
         await c.outbound_connect(first.id)
@@ -446,12 +474,12 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await c.rest_client.get_proxies())["proxies"]["main"]["now"], first.id)
         await c.service_stop()
         self.assertEqual(c.process_manager.status().state, CoreState.STOPPED)
-        await c.service_start(free_port())
+        await c.service_start()
         self.assertEqual((await c.rest_client.get_proxies())["proxies"]["main"]["now"], "REJECT")
 
     async def test_core_accepts_supported_protocols(self):
         c = self.client
-        await c.service_start(free_port())
+        await c.service_start()
         cases = [
             remote(),
             OutboundServer(
@@ -492,7 +520,7 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_process_failure_and_api_auth(self):
         c = self.client
-        await c.service_start(free_port())
+        await c.service_start()
         from server.cores.mihomo.mihomo_rest_client import MihomoRestClient
 
         with self.assertRaises(MihomoError):
@@ -517,7 +545,7 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
         direct = await self.echo(b"direct:")
         with self.assertRaises(RuntimeError):
             await c.routing_set([])
-        await c.service_start(free_port())
+        await c.service_start()
         listener = inbound()
         await c.inbound_set(listener)
         await c.outbound_register([server])

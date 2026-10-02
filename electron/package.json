@@ -1,0 +1,34 @@
+{
+  "name": "x-proxy-router",
+  "productName": "X Proxy Router",
+  "version": "0.1.0",
+  "description": "Runs and configures the Mihomo core: the server and its web interface in one window",
+  "homepage": "https://github.com/S-VIN/x-proxy-router",
+  "author": "S-VIN",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.cjs",
+  "desktopName": "io.github.s_vin.x_proxy_router.desktop",
+  "scripts": {
+    "icons": "node scripts/make-icons.mjs",
+    "build": "node scripts/build.mjs",
+    "dev": "npm run icons && npm run build && electron .",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "backend": "uv run --no-project python scripts/prepare-backend.py",
+    "dist": "electron-builder --publish never"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/node": "^24.19.1",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "prettier": "^3.9.9",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.3"
+  }
+}

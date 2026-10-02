@@ -358,7 +358,6 @@ class MihomoInboundTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         self.enterContext(chdir(self.enterContext(TemporaryDirectory())))
-        self.enterContext(patch("server.main.TEST_PORT", free_port()))
         self.enterContext(patch("server.settings_store.DEFAULT_PROXY_PORT", free_port()))
         self.enterContext(
             patch("server.handlers.subscriptions.load_subscription", new=AsyncMock(return_value=[]))
