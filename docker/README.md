@@ -8,7 +8,6 @@
 | --- | --- |
 | `Dockerfile` | Сборка образа из корня репозитория. |
 | `Dockerfile.dockerignore` | Что попадает в сборку. Базы, `subscription_links.txt` и `.env` в неё не попадают. |
-| `entrypoint.sh` | Проверяет `XPR_UI_PORT` и папку `/data`, затем запускает сервер. |
 | `compose.yaml` | Запуск на сервере. |
 | `.env.example` | Шаблон переменных для `compose.yaml`. |
 
@@ -57,16 +56,20 @@ docker compose up -d
 | Переменная | Обязательна | По умолчанию | Назначение |
 | --- | --- | --- | --- |
 | `XPR_UI_PORT` | да | — | Порт веб-интерфейса. |
-| `XPR_DATA_DIR` | да | — | Папка на сервере для настроек (`settings.sqlite3`), в контейнере это `/data`. Docker создаст её, если её нет. |
+| `XPR_DATA_DIR` | да | — | Абсолютный путь к папке на сервере для настроек (`settings.sqlite3`). Папка монтируется в контейнер по тому же пути. Если её нет, она будет создана. |
 | `XPR_UI_HOST` | нет | `0.0.0.0` | IP-адрес веб-интерфейса. `0.0.0.0` — все IPv4-адреса сервера, `127.0.0.1` — только сам сервер. |
 
-Если обязательная переменная не задана, `docker compose` не запустит контейнер и
-назовёт её. Без `compose` образ проверяет то же сам: нужны `XPR_UI_PORT` и папка
-хоста в `/data`, иначе контейнер завершится с сообщением.
+Переменные проверяет сам сервер. Если обязательная переменная не задана или
+значение неверное, он не запускается и пишет в лог, что исправить
+(`docker compose logs`). Без `XPR_DATA_DIR` не запустится и `docker compose`: по
+этой переменной он монтирует папку.
+
+Без `compose` переменные и папку нужно передать самому:
 
 ```sh
 docker run -d --name x-proxy-router --restart unless-stopped --network host \
-  -e XPR_UI_PORT=20800 -v /srv/x-proxy-router:/data \
+  -e XPR_UI_PORT=20800 -e XPR_DATA_DIR=/srv/x-proxy-router \
+  -v /srv/x-proxy-router:/srv/x-proxy-router \
   ghcr.io/s-vin/x-proxy-router:latest
 ```
 

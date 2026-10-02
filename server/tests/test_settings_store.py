@@ -173,6 +173,13 @@ class SettingsStoreTests(unittest.TestCase):
         another.subscription_link.save(link)
         self.assertEqual(self.store.subscription_link.get_by_id(link.id), link)
 
+    def test_directory_is_created_and_ignored_while_open(self):
+        self.store.close()
+        directory = Path.cwd() / "data" / "x-proxy-router"
+        with SettingsStore(directory) as store:
+            self.assertTrue((directory / "settings.sqlite3").is_file())
+            self.assertIs(SettingsStore(Path.cwd()), store)
+
     def test_close_allows_reopening_without_old_close_affecting_new_store(self):
         self.store.close()
         with SettingsStore() as reopened:

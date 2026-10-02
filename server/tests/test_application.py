@@ -45,6 +45,16 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.link = SubscriptionLink(url="https://example.com/startup")
 
+    async def test_settings_are_stored_in_the_data_folder(self):
+        data = Path.cwd() / "data"
+        with patch("server.main.DATA_DIR", data):
+            async with asyncio.timeout(2), application() as context:
+                context.settings.subscription_link.save(self.link)
+                await startup_finished(context)
+        self.assertFalse(Path("settings.sqlite3").exists())
+        with SettingsStore(data) as restored:
+            self.assertEqual(restored.subscription_link.get_all(), [self.link])
+
     async def test_init_refreshes_database_without_delaying_startup(self):
         started, finish = asyncio.Event(), asyncio.Event()
         server = OutboundServer(

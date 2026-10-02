@@ -39,13 +39,7 @@ COPY --from=python /app/.venv .venv/
 COPY --from=mihomo /out/ resources/mihomo/
 COPY --from=web /web/dist/ web/dist/
 COPY server/ server/
-COPY --chmod=755 docker/entrypoint.sh /app/entrypoint.sh
 
-# settings.sqlite3 is created in the working directory; a folder of the host is mounted there.
-WORKDIR /data
-ENV PATH=/app/.venv/bin:$PATH \
-    PYTHONPATH=/app \
-    PYTHONUNBUFFERED=1 \
-    XPR_UI_HOST=0.0.0.0
-
-ENTRYPOINT ["/app/entrypoint.sh"]
+ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1
+# The server requires XPR_UI_PORT and XPR_DATA_DIR; compose.yaml passes them.
+CMD ["python", "-m", "server.main"]

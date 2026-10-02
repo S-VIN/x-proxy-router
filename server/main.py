@@ -74,7 +74,7 @@ log = logging.getLogger(__name__)
 TEST_PORT = 20809
 
 # Clients connect to ws://WEBSOCKET_HOST:WEBSOCKET_PORT/ws (server/PROTOCOL.md).
-# The environment variables XPR_UI_HOST and XPR_UI_PORT replace them at startup, e.g. in Docker.
+# Running main.py takes them from XPR_UI_HOST and XPR_UI_PORT (read_environment).
 WEBSOCKET_HOST = "127.0.0.1"
 WEBSOCKET_PORT: int = 20800
 WEBSOCKET_PATH = "/ws"
@@ -87,29 +87,41 @@ WEBSOCKET_MAX_MESSAGE_SIZE = 1024 * 1024
 # The built web client (npm run build in web/), served at http://WEBSOCKET_HOST:WEBSOCKET_PORT/;
 # None serves only the WebSocket.
 WEB_CLIENT_DIR: Path | None = Path(__file__).resolve().parent.parent / "web" / "dist"
+# The folder of settings.sqlite3; running main.py takes it from XPR_DATA_DIR.
+# None is the working directory, e.g. in tests.
+DATA_DIR: Path | None = None
 
 
-def ui_address(environ: Mapping[str, str]) -> tuple[str, int]:
-    """Host and port of the web interface: XPR_UI_HOST and XPR_UI_PORT, or the defaults.
+def read_environment(environ: Mapping[str, str]) -> tuple[str, int, Path]:
+    """Host and port of the web interface and the data folder for running main.py.
 
-    The host is an IP address or localhost. Invalid values raise ValueError with a
-    message for the user.
+    XPR_UI_PORT and XPR_DATA_DIR (an absolute path) are required; XPR_UI_HOST is an
+    IP address or localhost, 0.0.0.0 when not set. The desktop application and Docker
+    set them. Missing or invalid values raise ValueError naming each of them.
     """
-    host = environ.get("XPR_UI_HOST", "").strip() or WEBSOCKET_HOST
+    errors = []
+    host = environ.get("XPR_UI_HOST", "").strip() or "0.0.0.0"
     if host != "localhost":
         try:
             ip_address(host)
         except ValueError:
-            raise ValueError(
+            errors.append(
                 f"XPR_UI_HOST must be an IP address, e.g. 0.0.0.0 or 127.0.0.1, not {host!r}"
-            ) from None
+            )
     value = environ.get("XPR_UI_PORT", "").strip()
-    if not value:
-        return host, WEBSOCKET_PORT
     port = int(value) if value.isdecimal() else 0
-    if not 1 <= port <= 65535:
-        raise ValueError(f"XPR_UI_PORT must be a port from 1 to 65535, not {value!r}")
-    return host, port
+    if not value:
+        errors.append("Set XPR_UI_PORT, the port of the web interface, e.g. 20800")
+    elif not 1 <= port <= 65535:
+        errors.append(f"XPR_UI_PORT must be a port from 1 to 65535, not {value!r}")
+    directory = environ.get("XPR_DATA_DIR", "").strip()
+    if not directory:
+        errors.append("Set XPR_DATA_DIR, the folder for the settings (settings.sqlite3)")
+    elif not Path(directory).is_absolute():
+        errors.append(f"XPR_DATA_DIR must be an absolute path, not {directory!r}")
+    if errors:
+        raise ValueError("\n".join(errors))
+    return host, port, Path(directory)
 
 
 def is_loopback(host: str) -> bool:
@@ -513,7 +525,7 @@ async def application() -> AsyncIterator[ApplicationContext]:
     With auto_connect on, the best stored server is connected then if nothing is
     (handlers/auto_connect.py).
     """
-    with SettingsStore() as settings:
+    with SettingsStore(DATA_DIR) as settings:
         core_client = MihomoClient()
         scheduler = Scheduler()
         websocket = WebSocketServer()
@@ -629,7 +641,7 @@ if __name__ == "__main__":
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     try:
-        WEBSOCKET_HOST, WEBSOCKET_PORT = ui_address(os.environ)
+        WEBSOCKET_HOST, WEBSOCKET_PORT, DATA_DIR = read_environment(os.environ)
     except ValueError as error:
         sys.exit(str(error))
     asyncio.run(main())

@@ -11,11 +11,14 @@ services:
     # Inbounds added in the web interface listen right on the server, at any
     # port and with UDP, without publishing ports here.
     network_mode: host
+    # The server checks them and stops with a message when one is missing or invalid.
     environment:
-      XPR_UI_HOST: ${XPR_UI_HOST:-0.0.0.0}
-      XPR_UI_PORT: ${XPR_UI_PORT:?Set XPR_UI_PORT in .env}
+      XPR_UI_HOST: ${XPR_UI_HOST:-}
+      XPR_UI_PORT: ${XPR_UI_PORT:-}
+      XPR_DATA_DIR: ${XPR_DATA_DIR:?Set XPR_DATA_DIR in .env, the folder for the settings}
+    # The folder of the server at the same path in the container.
     volumes:
-      - ${XPR_DATA_DIR:?Set XPR_DATA_DIR in .env}:/data
+      - ${XPR_DATA_DIR}:${XPR_DATA_DIR}
     # Mihomo logs every connection.
     logging:
       driver: json-file

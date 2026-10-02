@@ -638,11 +638,19 @@ class SettingsStore:
     inbound_server: InboundServerStore
     routing_rule: RoutingRuleStore
 
-    def __new__(cls) -> Self:
+    def __new__(cls, directory: Path | None = None) -> Self:
+        """The open store, or a new one with settings.sqlite3 in directory.
+
+        directory is created if missing; None is the working directory. While a
+        store is open, directory is ignored.
+        """
         if cls._instance is None:
             instance = super().__new__(cls)
+            if directory is None:
+                directory = Path.cwd()
+            directory.mkdir(parents=True, exist_ok=True)
             # SQLite creates the file if it does not exist.
-            instance._connection = sqlite3.connect(Path.cwd() / "settings.sqlite3")
+            instance._connection = sqlite3.connect(directory / "settings.sqlite3")
             try:
                 instance.server_settings = ServerSettingsStore(instance._connection)
                 instance.subscription_link = SubscriptionLinkStore(instance._connection)

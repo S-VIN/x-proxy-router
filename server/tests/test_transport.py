@@ -3,6 +3,7 @@ import json
 import socket
 import unittest
 from contextlib import chdir
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
 
@@ -15,7 +16,7 @@ from server.main import (
     configure_handlers,
     is_loopback,
     origin_allowed,
-    ui_address,
+    read_environment,
 )
 from server.models.application_context import ApplicationContext
 from server.tests.support import startup_finished
@@ -57,31 +58,39 @@ class OriginTests(unittest.TestCase):
             self.assertFalse(origin_allowed(origin, host), (origin, host))
 
 
-class UiAddressTests(unittest.TestCase):
-    def setUp(self):
-        # server/tests/__init__.py sets port 0 for the tests.
-        self.enterContext(patch("server.main.WEBSOCKET_PORT", 20800))
+class EnvironmentTests(unittest.TestCase):
+    DATA = str(Path("data").resolve())
 
-    def test_defaults_and_environment(self):
-        self.assertEqual(ui_address({}), ("127.0.0.1", 20800))
-        self.assertEqual(ui_address({"XPR_UI_HOST": "", "XPR_UI_PORT": " "}), ("127.0.0.1", 20800))
+    def test_required_values_and_default_host(self):
         self.assertEqual(
-            ui_address({"XPR_UI_HOST": "0.0.0.0", "XPR_UI_PORT": "8080"}), ("0.0.0.0", 8080)
+            read_environment({"XPR_UI_PORT": "20800", "XPR_DATA_DIR": self.DATA}),
+            ("0.0.0.0", 20800, Path(self.DATA)),
         )
-        self.assertEqual(ui_address({"XPR_UI_HOST": "::"}), ("::", 20800))
-        self.assertEqual(ui_address({"XPR_UI_HOST": "localhost"}), ("localhost", 20800))
+        for host in ("127.0.0.1", "::", "localhost"):
+            environ = {"XPR_UI_HOST": host, "XPR_UI_PORT": " 8080 ", "XPR_DATA_DIR": self.DATA}
+            self.assertEqual(read_environment(environ), (host, 8080, Path(self.DATA)))
 
-    def test_invalid_values_are_named(self):
-        for environ, name in (
-            ({"XPR_UI_PORT": "0"}, "XPR_UI_PORT"),
-            ({"XPR_UI_PORT": "65536"}, "XPR_UI_PORT"),
-            ({"XPR_UI_PORT": "-1"}, "XPR_UI_PORT"),
-            ({"XPR_UI_PORT": "http"}, "XPR_UI_PORT"),
-            ({"XPR_UI_HOST": "router.example"}, "XPR_UI_HOST"),
-            ({"XPR_UI_HOST": "0.0.0.0:20800"}, "XPR_UI_HOST"),
+    def test_missing_and_invalid_values_are_named(self):
+        valid = {"XPR_UI_PORT": "20800", "XPR_DATA_DIR": self.DATA}
+        for changes, name in (
+            ({"XPR_UI_PORT": ""}, "Set XPR_UI_PORT"),
+            ({"XPR_UI_PORT": "0"}, "XPR_UI_PORT must"),
+            ({"XPR_UI_PORT": "65536"}, "XPR_UI_PORT must"),
+            ({"XPR_UI_PORT": "-1"}, "XPR_UI_PORT must"),
+            ({"XPR_UI_PORT": "http"}, "XPR_UI_PORT must"),
+            ({"XPR_DATA_DIR": " "}, "Set XPR_DATA_DIR"),
+            ({"XPR_DATA_DIR": "data"}, "XPR_DATA_DIR must be an absolute path"),
+            ({"XPR_UI_HOST": "router.example"}, "XPR_UI_HOST must"),
+            ({"XPR_UI_HOST": "0.0.0.0:20800"}, "XPR_UI_HOST must"),
         ):
             with self.assertRaisesRegex(ValueError, name):
-                ui_address(environ)
+                read_environment(valid | changes)
+        with self.assertRaises(ValueError) as raised:
+            read_environment({})
+        self.assertEqual(
+            [line.split(",")[0] for line in str(raised.exception).splitlines()],
+            ["Set XPR_UI_PORT", "Set XPR_DATA_DIR"],
+        )
 
     def test_loopback(self):
         for host in ("127.0.0.1", "127.0.0.2", "::1", "localhost"):
