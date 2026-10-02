@@ -206,7 +206,20 @@ async function smokeTest(): Promise<void> {
   }
 }
 
+/**
+ * Chromium's processes take most of the memory, not the interface (README.md):
+ * - the page is drawn without the GPU: it looks the same, and the GPU process loads
+ *   no graphics driver, which was most of its memory;
+ * - the network service, which here only loads the page from the local server, runs
+ *   in the main process instead of a process of its own.
+ */
+function saveMemory(): void {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
+}
+
 if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
+saveMemory();
 
 if (process.argv.includes(SMOKE_TEST_FLAG)) {
   // Without a listener Electron quits when the test closes its window.
