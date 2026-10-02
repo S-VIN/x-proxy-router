@@ -14,7 +14,7 @@ export interface AppTrayOptions {
 }
 
 /**
- * Whether the desktop shows tray icons. Windows always does; on Linux a
+ * Whether the desktop shows tray icons. Windows and macOS always do; on Linux a
  * StatusNotifier host must run: GNOME has none without an extension.
  */
 export function trayAvailable(): Promise<boolean> {
@@ -39,10 +39,11 @@ export function trayAvailable(): Promise<boolean> {
 
 /**
  * The logo in the color of the state. Windows picks the @1.25x … @3x files next
- * to the 16 px one; Linux hosts scale one large icon.
+ * to the 16 px one and macOS the @2x one; Linux hosts scale one large icon.
  */
 export function trayImage(assets: string, state: LinkState): Electron.NativeImage {
-  const name = process.platform === 'win32' ? `${state}.png` : `${state}-large.png`;
+  const suffixes: Partial<Record<NodeJS.Platform, string>> = { win32: '', darwin: '-mac' };
+  const name = `${state}${suffixes[process.platform] ?? '-large'}.png`;
   return nativeImage.createFromPath(path.join(assets, 'tray', name));
 }
 
@@ -58,7 +59,8 @@ export class AppTray {
   constructor(options: AppTrayOptions) {
     this.#options = options;
     this.#tray = new Tray(trayImage(options.assets, 'none'));
-    this.#tray.on('click', options.onOpen);
+    // macOS opens the menu on a click itself; elsewhere a click opens the window.
+    if (process.platform !== 'darwin') this.#tray.on('click', options.onOpen);
     this.#updateMenu();
   }
 

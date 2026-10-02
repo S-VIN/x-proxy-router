@@ -1,7 +1,7 @@
 # x-proxy-router
 
 Проект приложения для запуска и настройки ядра Mihomo: серверная часть, затем веб-интерфейс
-и десктопное приложение на Electron для Windows и Linux.
+и десктопное приложение на Electron для Windows, Linux и macOS.
 
 ## Инструменты разработки
 
@@ -41,9 +41,11 @@ Ruff проверяет стиль и ошибки кода, ty — типы.
 | Linux | ARM64 / aarch64 | `resources/mihomo/linux/arm64/mihomo` |
 | Windows | x86-64 / amd64 | `resources/mihomo/win32/x64/mihomo.exe` |
 | Windows | ARM64 | `resources/mihomo/win32/arm64/mihomo.exe` |
+| macOS | x86-64 / amd64 (Intel) | `resources/mihomo/darwin/x64/mihomo` |
+| macOS | ARM64 (Apple silicon) | `resources/mihomo/darwin/arm64/mihomo` |
 
 Для x86-64 используются сборки `compatible`, они работают и на старых процессорах.
-Имена `linux`, `win32`, `x64`, `arm64` соответствуют значениям Node.js
+Имена `linux`, `win32`, `darwin`, `x64`, `arm64` соответствуют значениям Node.js
 `process.platform` и `process.arch`. Остальные ОС и архитектуры пока не включены.
 
 ### Повторное скачивание
@@ -56,7 +58,7 @@ python3 scripts/download-mihomo.py
 
 На Windows используйте `py -3` вместо `python3`. Версия и SHA-256 архивов
 закреплены в скрипте; он проверяет архив перед распаковкой, перезаписывает
-бинарники и выставляет Linux-бинарникам права `0755`. Для обновления версии
+бинарники и выставляет бинарникам Linux и macOS права `0755`. Для обновления версии
 нужно обновить версию и SHA-256 в скрипте из официального релиза.
 
 ### Использование сервером, Docker и Electron
@@ -117,9 +119,10 @@ GitHub Actions (только вручную) и публикует в `ghcr.io/s
 
 ## Десктопное приложение
 
-Папка [`electron`](electron) — приложение для Windows и Linux (x64 и arm64): запускает
-сервер с ядром и показывает веб-интерфейс в своём окне, при закрытии окна остаётся в
-трее. Варианты: инсталлер и портативный exe для Windows, AppImage и Flatpak для Linux.
+Папка [`electron`](electron) — приложение для Windows, Linux и macOS (x64 и arm64):
+запускает сервер с ядром и показывает веб-интерфейс в своём окне, при закрытии окна
+остаётся в трее. Варианты: инсталлер и портативный exe для Windows, AppImage и Flatpak
+для Linux, образ DMG для macOS.
 Их собирает workflow «Desktop application» в GitHub Actions (только вручную), файлы —
 в артефактах запуска. Запуск для разработки:
 

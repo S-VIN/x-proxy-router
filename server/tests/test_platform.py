@@ -18,6 +18,15 @@ class PlatformTests(unittest.TestCase):
                 self.assertIs(system, OperatingSystem.LINUX)
                 self.assertIs(detected_arch, arch)
 
+    def test_macos_architectures(self):
+        for machine, arch in (("arm64", Architecture.ARM64), ("x86_64", Architecture.X64)):
+            with (
+                patch("server.utils.platform.platform.machine", return_value=machine),
+                patch("server.utils.platform.sys.platform", "darwin"),
+                patch("server.utils.platform.struct.calcsize", return_value=8),
+            ):
+                self.assertEqual(detect_platform(), (OperatingSystem.MACOS, arch))
+
     def test_unsupported_32bit(self):
         with (
             patch("server.utils.platform.struct.calcsize", return_value=4),

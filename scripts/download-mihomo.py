@@ -34,6 +34,16 @@ ASSETS = {
         "zip",
         "68659624a38ae1dbc4e1b92f45d4dc75da0eaedd4d732b0a6f01a308da945792",
     ),
+    ("darwin", "x64"): (
+        "darwin-amd64-compatible",
+        "gz",
+        "fb6fca0e105b4310a21eaacd3a8d3853d3d8b87fa4c69737bea52a30a435aac7",
+    ),
+    ("darwin", "arm64"): (
+        "darwin-arm64",
+        "gz",
+        "d131f44b3deb2a8356f7ac75048ad67a10d53243323951c4f3cda7b672922963",
+    ),
 }
 
 
@@ -69,7 +79,7 @@ def main():
         target = directory / ("mihomo.exe" if system == "win32" else "mihomo")
         temporary = target.with_suffix(".download")
         temporary.write_bytes(binary)
-        if system == "linux":
+        if system != "win32":
             temporary.chmod(0o755)
         temporary.replace(target)
         record = {

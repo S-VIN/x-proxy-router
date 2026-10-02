@@ -53,7 +53,25 @@ function showWindow(minimized = false): void {
     mainWindow.show(backend.origin, minimized);
   } catch {
     // The server is starting or restarting: the window opens when it is ready.
+    return;
   }
+  // macOS: the Dock shows the application while it has a window, the menu bar always.
+  void app.dock?.show();
+}
+
+/**
+ * Windows and Linux: no menu bar, the interface is the whole application. macOS
+ * has its menus at the top of the screen, and without them Cmd+C, Cmd+V, Cmd+W
+ * and Cmd+Q do nothing.
+ */
+function applicationMenu(): Menu | null {
+  if (process.platform !== 'darwin') return null;
+  return Menu.buildFromTemplate([
+    { role: 'appMenu' },
+    { role: 'fileMenu' },
+    { role: 'editMenu' },
+    { role: 'windowMenu' },
+  ]);
 }
 
 function logTail(): string {
@@ -105,8 +123,9 @@ async function serverExited(code: number | null): Promise<void> {
 }
 
 async function start(): Promise<void> {
-  // The window has no menu bar; the interface is the whole application.
-  Menu.setApplicationMenu(null);
+  Menu.setApplicationMenu(applicationMenu());
+  const hidden = process.argv.includes(HIDDEN_FLAG);
+  if (hidden) app.dock?.hide();
   if (!(await startServer())) {
     app.quit();
     return;
@@ -124,7 +143,7 @@ async function start(): Promise<void> {
     // The entry stays as it is; the tray menu can replace it.
   }
   // Started at login: only the tray icon. Without a tray the window is the only way in.
-  if (!process.argv.includes(HIDDEN_FLAG)) showWindow();
+  if (!hidden) showWindow();
   else if (!(await trayAvailable())) showWindow(true);
 }
 
@@ -198,8 +217,13 @@ if (process.argv.includes(SMOKE_TEST_FLAG)) {
   app.quit();
 } else {
   app.on('second-instance', () => showWindow());
+  // macOS: the application was opened again while it runs, or its Dock icon was clicked.
+  app.on('activate', (_event, hasVisibleWindows) => {
+    if (!hasVisibleWindows) showWindow();
+  });
   // Closing the window leaves the application in the tray; without a tray it exits.
   app.on('window-all-closed', () => {
+    app.dock?.hide();
     void trayAvailable().then((available) => {
       if (!available) app.quit();
     });

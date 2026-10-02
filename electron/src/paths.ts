@@ -23,8 +23,9 @@ export interface Paths {
  * - XPR_DESKTOP_DATA_DIR, when set: for development and tests;
  * - the portable Windows build: data/ next to the exe, nothing is left on the computer;
  * - development: the repository, like the server started by hand (README.md);
- * - otherwise the user's application data, e.g. %APPDATA%\x-proxy-router or
- *   ~/.config/x-proxy-router (~/.var/app/<id>/config/x-proxy-router in Flatpak).
+ * - otherwise the user's application data: %APPDATA%\x-proxy-router,
+ *   ~/Library/Application Support/x-proxy-router or ~/.config/x-proxy-router
+ *   (~/.var/app/<id>/config/x-proxy-router in Flatpak).
  */
 function dataDirectory(): string {
   const override = process.env.XPR_DESKTOP_DATA_DIR;

@@ -857,8 +857,8 @@ await context.tasks.cancel_all()  # при остановке приложени
 
 ## Остановка
 
-Используется `Process.terminate()`: SIGTERM на Linux и TerminateProcess на Windows.
-Таймаута и последующего SIGKILL нет; на Linux процесс, игнорирующий SIGTERM,
+Используется `Process.terminate()`: SIGTERM на Linux и macOS, TerminateProcess на Windows.
+Таймаута и последующего SIGKILL нет; на Linux и macOS процесс, игнорирующий SIGTERM,
 может удерживать `stop()` в ожидании. Очистки при отмене асинхронных операций нет.
 Приложение вызывает `stop()` при штатном завершении, например в `finally` своего lifespan.
 
@@ -866,8 +866,12 @@ Mihomo запускается через `utils.start_child_process`, поэто
 Python без `stop()` его останавливает ОС. На Linux ядро получает SIGTERM
 (`PR_SET_PDEATHSIG`). Сигнал привязан к потоку, запустившему процесс, поэтому ядро
 запускается из потока event loop. На Windows ядро входит в job object с
-`KILL_ON_JOB_CLOSE`, и Windows завершает его вместе с сервером. Если job object
-создать не удалось, в лог пишется предупреждение и ядро работает без этой защиты.
+`KILL_ON_JOB_CLOSE`, и Windows завершает его вместе с сервером. На macOS ни того,
+ни другого нет: рядом с ядром запускается процесс-сторож — тот же Python с коротким
+скриптом, который читает pipe от сервера. Когда сервера не стало, ОС закрывает pipe, и
+сторож посылает ядру SIGTERM; если ядро завершилось раньше, сервер завершает сторожа.
+Если job object или сторожа создать не удалось, в лог пишется предупреждение и ядро
+работает без этой защиты.
 Временная папка конфигурации ядра после смерти Python остаётся в системной папке temp.
 
 ## Платформы и ресурсы
@@ -876,8 +880,8 @@ Python без `stop()` его останавливает ОС. На Linux ядр
 `CoreState` и `CoreStatus`. Их можно импортировать напрямую из `server.models`.
 
 `server.utils.detect_platform()` возвращает пару enum
-`tuple[OperatingSystem, Architecture]`: `LINUX`/`WINDOWS` и `X64`/`ARM64`.
-Строковые значения `.value` (`linux`/`win32`, `x64`/`arm64`) соответствуют папкам ресурсов.
+`tuple[OperatingSystem, Architecture]`: `LINUX`/`WINDOWS`/`MACOS` и `X64`/`ARM64`.
+Строковые значения `.value` (`linux`/`win32`/`darwin`, `x64`/`arm64`) соответствуют папкам ресурсов.
 32-битные Python и неподдерживаемые платформы отклоняются явно. Бинарник находится
 относительно репозитория в `resources/mihomo/<os>/<arch>/mihomo[.exe]`, независимо
 от текущего рабочего каталога.

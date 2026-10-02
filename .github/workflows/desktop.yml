@@ -38,6 +38,16 @@ jobs:
             os: win
             arch: arm64
             unpacked: win-arm64-unpacked
+          - name: macOS x64
+            runner: macos-26-intel
+            os: mac
+            arch: x64
+            unpacked: mac
+          - name: macOS arm64
+            runner: macos-26
+            os: mac
+            arch: arm64
+            unpacked: mac-arm64
     steps:
       - uses: actions/checkout@v7
 
@@ -138,6 +148,35 @@ jobs:
             exit 1
           }
 
+      # The signature holds and covers the executable files of the server.
+      - name: Check the application (macOS)
+        if: matrix.os == 'mac'
+        working-directory: electron
+        run: |
+          app="release/${{ matrix.unpacked }}/X Proxy Router.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          export XPR_DESKTOP_DATA_DIR="$RUNNER_TEMP/unpacked"
+          "$app/Contents/MacOS/X Proxy Router" --smoke-test \
+            || { cat "$XPR_DESKTOP_DATA_DIR/logs/server.log"; exit 1; }
+
+      # The application as the user gets it: started from the read-only image.
+      - name: Check the disk image
+        if: matrix.os == 'mac'
+        working-directory: electron
+        run: |
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/image" release/*.dmg
+          export XPR_DESKTOP_DATA_DIR="$RUNNER_TEMP/image-data"
+          "$RUNNER_TEMP/image/X Proxy Router.app/Contents/MacOS/X Proxy Router" --smoke-test \
+            || { cat "$XPR_DESKTOP_DATA_DIR/logs/server.log"; exit 1; }
+          hdiutil detach "$RUNNER_TEMP/image"
+
+      # The server is developed on Linux: its tests run on macOS only here.
+      - name: Server tests (macOS)
+        if: matrix.os == 'mac'
+        run: |
+          uv sync --locked
+          uv run python -m unittest discover -s server/tests
+
       # Kept when a check fails, to look at what was built.
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
@@ -145,6 +184,7 @@ jobs:
           name: x-proxy-router-${{ matrix.os }}-${{ matrix.arch }}
           path: |
             electron/release/*.exe
+            electron/release/*.dmg
             electron/release/*.AppImage
             electron/release/*.flatpak
           if-no-files-found: error

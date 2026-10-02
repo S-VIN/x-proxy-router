@@ -6,6 +6,7 @@ from enum import StrEnum
 class OperatingSystem(StrEnum):
     LINUX = "linux"
     WINDOWS = "win32"
+    MACOS = "darwin"
 
 
 class Architecture(StrEnum):

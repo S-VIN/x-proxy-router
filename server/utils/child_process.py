@@ -16,6 +16,17 @@ _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 _PROCESS_SET_QUOTA = 0x0100
 _PROCESS_TERMINATE = 0x0001
+# The watcher process of macOS: stops the process named in its argument when the
+# pipe from the server closes, which the OS does when the server exits.
+_WATCHER = """
+import os, signal, sys
+while os.read(0, 4096):
+    pass
+try:
+    os.kill(int(sys.argv[1]), signal.SIGTERM)
+except ProcessLookupError:
+    pass
+"""
 
 
 async def start_child_process(
@@ -28,20 +39,25 @@ async def start_child_process(
     when the server dies (PR_SET_PDEATHSIG); call this from the event loop
     thread, since the signal follows the thread that started the child. On
     Windows the child joins a job object that is killed when the server exits,
-    and no console window opens.
+    and no console window opens. macOS has neither: a watcher process sends the
+    child SIGTERM when the server is gone.
     """
+    linux = sys.platform.startswith("linux")
     process = await asyncio.create_subprocess_exec(
         *command,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         env=env,
-        preexec_fn=_stop_with_parent() if sys.platform.startswith("linux") else None,
+        preexec_fn=_stop_with_parent() if linux else None,
         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
     )
-    if sys.platform == "win32":
+    if not linux:
         try:
-            _add_to_job(process.pid)
+            if sys.platform == "win32":
+                _add_to_job(process.pid)
+            else:
+                _stop_after_server(process)
         except OSError:
             log.warning("The child process %s may outlive the server", process.pid, exc_info=True)
     return process
@@ -62,6 +78,40 @@ def _stop_with_parent() -> Callable[[], None]:
             os._exit(1)
 
     return set_signal
+
+
+# The tasks of _end_watcher: the event loop keeps only weak references to tasks.
+_watchers: set[asyncio.Task[None]] = set()
+
+
+def _stop_after_server(process: asyncio.subprocess.Process) -> None:
+    """Start a watcher that stops the child when the server exits without doing it."""
+    watcher = subprocess.Popen(
+        [sys.executable, "-I", "-S", "-c", _WATCHER, str(process.pid)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        # Ctrl+C in the terminal of the server must not stop the watcher.
+        start_new_session=True,
+    )
+    task = asyncio.get_running_loop().create_task(_end_watcher(process, watcher))
+    _watchers.add(task)
+    task.add_done_callback(_watchers.discard)
+
+
+async def _end_watcher(
+    process: asyncio.subprocess.Process, watcher: subprocess.Popen[bytes]
+) -> None:
+    """End the watcher of a child that exited: its pid may go to another process."""
+    try:
+        await process.wait()
+    finally:
+        # Cancelled while the child runs: the server exits, the watcher stops the child.
+        if process.returncode is not None:
+            watcher.kill()
+            watcher.wait()
+            assert watcher.stdin is not None
+            watcher.stdin.close()
 
 
 class _JobBasicLimitInformation(ctypes.Structure):

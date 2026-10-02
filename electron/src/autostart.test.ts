@@ -4,7 +4,7 @@ vi.mock('electron', () => ({
   app: { isPackaged: true, getAppPath: () => '/app' },
 }));
 
-const { desktopEntry, launchCommand } = await import('./autostart');
+const { desktopEntry, launchAgent, launchCommand } = await import('./autostart');
 
 describe('launchCommand', () => {
   it('starts what the user has, not what runs now', () => {
@@ -43,5 +43,34 @@ describe('desktopEntry', () => {
     expect(lines).toContain(`Exec=flatpak run ${id} --hidden`);
     expect(lines).toContain(`Icon=${id}`);
     expect(lines).toContain(`X-Flatpak=${id}`);
+  });
+});
+
+describe('launchAgent', () => {
+  it('runs the command at login', () => {
+    const agent = launchAgent([
+      '/Applications/X Proxy Router.app/Contents/MacOS/X Proxy Router',
+      '--hidden',
+    ]);
+    expect(agent).toContain('<key>Label</key>\n  <string>io.github.s_vin.x_proxy_router</string>');
+    expect(agent).toContain(
+      [
+        '  <key>ProgramArguments</key>',
+        '  <array>',
+        '    <string>/Applications/X Proxy Router.app/Contents/MacOS/X Proxy Router</string>',
+        '    <string>--hidden</string>',
+        '  </array>',
+        '  <key>RunAtLoad</key>',
+        '  <true/>',
+      ].join('\n'),
+    );
+    expect(agent.startsWith('<?xml version="1.0" encoding="UTF-8"?>\n')).toBe(true);
+    expect(agent.endsWith('</plist>\n')).toBe(true);
+  });
+
+  it('escapes the path for XML', () => {
+    expect(launchAgent(['/Users/me/R&D <apps>/X.app/Contents/MacOS/X'])).toContain(
+      '<string>/Users/me/R&amp;D &lt;apps&gt;/X.app/Contents/MacOS/X</string>',
+    );
   });
 });

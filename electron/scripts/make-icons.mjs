@@ -16,7 +16,10 @@ const build = path.join(root, 'build');
 // display's scale by its suffix. Linux tray hosts scale one large picture.
 const TRAY_SCALES = { '': 16, '@1.25x': 20, '@1.5x': 24, '@2x': 32, '@3x': 48 };
 const TRAY_LARGE = 64;
-// Sizes of an icon theme; electron-builder also makes the Windows icon from the largest.
+// The menu bar of macOS shows the picture as it is: 20 points, the logo itself 16.
+const TRAY_MAC_SCALES = { '': 20, '@2x': 40 };
+// Sizes of an icon theme; electron-builder also makes the Windows and macOS icons from
+// the largest. The logo has the margins macOS expects of an icon.
 const APP_SIZES = [16, 24, 32, 48, 64, 128, 256, 512];
 
 function render(state, size) {
@@ -33,6 +36,9 @@ for (const state of ['none', 'working', 'failed']) {
     write(path.join(assets, 'tray', `${state}${suffix}.png`), render(state, size));
   }
   write(path.join(assets, 'tray', `${state}-large.png`), render(state, TRAY_LARGE));
+  for (const [suffix, size] of Object.entries(TRAY_MAC_SCALES)) {
+    write(path.join(assets, 'tray', `${state}-mac${suffix}.png`), render(state, size));
+  }
 }
 
 // The application itself is blue: the logo with no server connected.

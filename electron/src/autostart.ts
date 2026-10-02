@@ -7,14 +7,17 @@ import path from 'node:path';
 export const HIDDEN_FLAG = '--hidden';
 
 export const APP_NAME = 'X Proxy Router';
-/** The Flatpak application id, the Windows AppUserModelID and the name of the icon. */
+/**
+ * The Flatpak application id, the Windows AppUserModelID, the label of the macOS
+ * launch agent and the name of the icon.
+ */
 export const APP_ID = 'io.github.s_vin.x_proxy_router';
 const DESKTOP_FILE = 'x-proxy-router.desktop';
 
 export interface Autostart {
   isEnabled(): boolean;
   setEnabled(enabled: boolean): void;
-  /** Point an enabled entry at this executable again, e.g. after the AppImage was moved. */
+  /** Point an enabled entry at this executable again, e.g. after the application was moved. */
   refresh(): void;
 }
 
@@ -53,19 +56,37 @@ export function desktopEntry(command: string[], flatpakId?: string): string {
   return `${lines.join('\n')}\n`;
 }
 
-/**
- * Linux has no API for it: a desktop entry in the autostart folder of the user.
- * Flatpak gives the application its own XDG_CONFIG_HOME, so there the folder of
- * the host is used (the package is allowed to write it).
- */
-function linuxAutostart(): Autostart {
-  const flatpakId = process.env.FLATPAK_ID;
-  const config =
-    !flatpakId && process.env.XDG_CONFIG_HOME
-      ? process.env.XDG_CONFIG_HOME
-      : path.join(os.homedir(), '.config');
-  const file = path.join(config, 'autostart', DESKTOP_FILE);
-  const entry = () => desktopEntry(launchCommand(), flatpakId);
+/** The text of a property list string. */
+function escapeXml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** The launch agent of macOS that starts the command at login. */
+export function launchAgent(command: string[]): string {
+  const lines = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0">',
+    '<dict>',
+    '  <key>Label</key>',
+    `  <string>${APP_ID}</string>`,
+    '  <key>ProgramArguments</key>',
+    '  <array>',
+    ...command.map((argument) => `    <string>${escapeXml(argument)}</string>`),
+    '  </array>',
+    '  <key>RunAtLoad</key>',
+    '  <true/>',
+    // An application the user works with, not a background job to slow down.
+    '  <key>ProcessType</key>',
+    '  <string>Interactive</string>',
+    '</dict>',
+    '</plist>',
+  ];
+  return `${lines.join('\n')}\n`;
+}
+
+/** An entry that is a file the system reads at login: it exists while autostart is on. */
+function fileAutostart(file: string, entry: () => string): Autostart {
   const read = () => {
     try {
       return fs.readFileSync(file, 'utf8');
@@ -91,6 +112,31 @@ function linuxAutostart(): Autostart {
 }
 
 /**
+ * Linux has no API for it: a desktop entry in the autostart folder of the user.
+ * Flatpak gives the application its own XDG_CONFIG_HOME, so there the folder of
+ * the host is used (the package is allowed to write it).
+ */
+function linuxAutostart(): Autostart {
+  const flatpakId = process.env.FLATPAK_ID;
+  const config =
+    !flatpakId && process.env.XDG_CONFIG_HOME
+      ? process.env.XDG_CONFIG_HOME
+      : path.join(os.homedir(), '.config');
+  return fileAutostart(path.join(config, 'autostart', DESKTOP_FILE), () =>
+    desktopEntry(launchCommand(), flatpakId),
+  );
+}
+
+/**
+ * macOS: a launch agent of the user, which launchd reads at login. The login
+ * items of the system settings cannot pass --hidden to the application.
+ */
+function macAutostart(): Autostart {
+  const file = path.join(os.homedir(), 'Library', 'LaunchAgents', `${APP_ID}.plist`);
+  return fileAutostart(file, () => launchAgent(launchCommand()));
+}
+
+/**
  * Windows: a value of the Run key of the user, named after the AppUserModelID
  * (main.ts sets it to APP_ID); installer.nsh removes it on uninstall.
  */
@@ -110,5 +156,7 @@ function windowsAutostart(): Autostart {
 }
 
 export function createAutostart(): Autostart {
-  return process.platform === 'win32' ? windowsAutostart() : linuxAutostart();
+  if (process.platform === 'win32') return windowsAutostart();
+  if (process.platform === 'darwin') return macAutostart();
+  return linuxAutostart();
 }

@@ -50,9 +50,17 @@ PYTHONS = {
         "aarch64-pc-windows-msvc",
         "2b7d0422475973a90fb0817e9062a00ee745c46a3376c46e7a397ab0e345881e",
     ),
+    ("mac", "x64"): (
+        "x86_64-apple-darwin",
+        "d101ac54bc34afff54741406261325dc896b7b646a36a58fff4845ef0a00b2ce",
+    ),
+    ("mac", "arm64"): (
+        "aarch64-apple-darwin",
+        "10cab8f6ed6202fdd81637aa6eda4af8d5b7eaa8fc42f9df3c6bea4923de0d93",
+    ),
 }
 # Folder of the core in resources/mihomo, named as Node.js names the platform.
-MIHOMO_SYSTEMS = {"linux": "linux", "win": "win32"}
+MIHOMO_SYSTEMS = {"linux": "linux", "win": "win32", "mac": "darwin"}
 
 # Parts of the standard library the server never imports, relative to it.
 UNUSED_LIBRARY = [
@@ -67,25 +75,27 @@ UNUSED_LIBRARY = [
     "site-packages/pip-*.dist-info",
 ]
 # Files of the Python build that only serve building, embedding or Tk.
+UNUSED_UNIX_PYTHON = [
+    "include",
+    "share",
+    "lib/pkgconfig",
+    # The executable is linked statically; the library is for embedding.
+    "lib/libpython3*",
+    "lib/libtcl*",
+    "lib/tcl*",
+    "lib/tk*",
+    "lib/itcl*",
+    "lib/thread*",
+    "lib/python3.12/lib-dynload/_tkinter*",
+    "bin/2to3*",
+    "bin/idle3*",
+    "bin/pip*",
+    "bin/pydoc3*",
+    "bin/python3*-config",
+]
 UNUSED_PYTHON = {
-    "linux": [
-        "include",
-        "share",
-        "lib/pkgconfig",
-        # The executable is linked statically; the library is for embedding.
-        "lib/libpython3*",
-        "lib/libtcl*",
-        "lib/tcl*",
-        "lib/tk*",
-        "lib/itcl*",
-        "lib/thread*",
-        "lib/python3.12/lib-dynload/_tkinter*",
-        "bin/2to3*",
-        "bin/idle3*",
-        "bin/pip*",
-        "bin/pydoc3*",
-        "bin/python3*-config",
-    ],
+    "linux": UNUSED_UNIX_PYTHON,
+    "mac": UNUSED_UNIX_PYTHON,
     "win": [
         "include",
         "libs",
@@ -101,7 +111,7 @@ UNUSED_PYTHON = {
 
 
 def host_target() -> tuple[str, str]:
-    systems = {"linux": "linux", "win32": "win"}
+    systems = {"linux": "linux", "win32": "win", "darwin": "mac"}
     machines = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}
     return systems.get(sys.platform, sys.platform), machines.get(
         platform.machine().lower(), platform.machine()
@@ -192,7 +202,7 @@ def stage_application(stage: Path, system: str, arch: str) -> None:
     (stage / "resources" / "mihomo" / directory).mkdir(parents=True)
     shutil.copy2(mihomo / "LICENSE", stage / "resources" / "mihomo" / "LICENSE")
     shutil.copy2(mihomo / binary, stage / "resources" / "mihomo" / binary)
-    if system == "linux":
+    if system != "win":
         (stage / "resources" / "mihomo" / binary).chmod(0o755)
 
 
@@ -210,7 +220,7 @@ def compile_and_check(stage: Path, system: str, library: Path) -> None:
 def main() -> None:
     host = host_target()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--os", choices=["linux", "win"], default=host[0])
+    parser.add_argument("--os", choices=["linux", "win", "mac"], default=host[0])
     parser.add_argument("--arch", choices=["x64", "arm64"], default=host[1])
     arguments = parser.parse_args()
     system, arch = arguments.os, arguments.arch

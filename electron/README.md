@@ -1,6 +1,6 @@
 # Десктопное приложение
 
-Electron-обвязка: одно приложение для Windows и Linux, которое запускает сервер
+Electron-обвязка: одно приложение для Windows, Linux и macOS, которое запускает сервер
 (`server/`) с ядром Mihomo и показывает его веб-интерфейс (`web/`) в своём окне.
 Пользователю не нужны ни Python, ни браузер.
 
@@ -10,9 +10,11 @@ Electron-обвязка: одно приложение для Windows и Linux, 
 | Портативный Windows | `x-proxy-router-<версия>-windows-<arch>-portable.exe` | папка `data` рядом с exe                                          |
 | AppImage            | `x-proxy-router-<версия>-linux-<arch>.AppImage`       | `~/.config/x-proxy-router`                                        |
 | Flatpak             | `x-proxy-router-<версия>-linux-<arch>.flatpak`        | `~/.var/app/io.github.s_vin.x_proxy_router/config/x-proxy-router` |
+| Образ macOS         | `x-proxy-router-<версия>-macos-<arch>.dmg`            | `~/Library/Application Support/x-proxy-router`                    |
 
-Каждый вариант собирается под x64 и arm64. В папке данных лежат `settings.sqlite3`
-сервера, лог `logs/server.log`, размер окна `window.json` и профиль браузера `browser/`.
+Каждый вариант собирается под x64 и arm64 (у Mac это Intel и Apple silicon). В папке
+данных лежат `settings.sqlite3` сервера, лог `logs/server.log`, размер окна `window.json`
+и профиль браузера `browser/`. Приложению для macOS нужна macOS 13 или новее.
 
 ## Как это работает
 
@@ -23,20 +25,25 @@ Electron-обвязка: одно приложение для Windows и Linux, 
   предыдущий хранится как `server.log.1`.
 - **Окно** открывает `http://127.0.0.1:<порт>/` — страницу, которую раздаёт сам сервер,
   поэтому веб-интерфейс тот же, что в браузере (`src/window.ts`). Меню нет, размер и
-  положение запоминаются, ссылки на другие сайты открываются в браузере.
+  положение запоминаются, ссылки на другие сайты открываются в браузере. В macOS меню
+  наверху экрана остаётся стандартным: без него не работают Cmd+C, Cmd+V, Cmd+W и Cmd+Q.
 - **Трей.** Закрытие окна оставляет приложение в трее: сервер и ядро работают, окно
   уничтожается и создаётся заново по клику на иконку или пункту «Open». Иконка — логотип
   в цвете состояния, как в интерфейсе: синий — сервер не выбран, зелёный — трафик идёт
   через сервер, красный — ошибка. Состояние считает main-процесс по собственному
   WebSocket-соединению (`src/linkWatcher.ts`), теми же функциями `web/src/lib/linkState.ts`,
-  что и интерфейс. Выход — пункт «Quit».
+  что и интерфейс. Выход — пункт «Quit». В macOS иконка живёт в строке меню и по
+  клику открывает меню; в Dock приложение видно, только пока открыто окно.
 - **Нет трея.** В GNOME без расширения AppIndicator иконок трея нет. Тогда закрытие окна
   завершает приложение, а запуск при входе открывает свёрнутое окно.
 - **Автозапуск** — флажок «Launch at login» в меню трея (`src/autostart.ts`). Windows:
   запись в `HKCU\...\Run` с именем `io.github.s_vin.x_proxy_router`. Linux: файл
-  `~/.config/autostart/x-proxy-router.desktop`. Приложение стартует с `--hidden`: без
-  окна, только иконка. Запись указывает на тот файл, который запускает пользователь
-  (AppImage, портативный exe); если AppImage перенесли, она исправляется при запуске.
+  `~/.config/autostart/x-proxy-router.desktop`. macOS: launch agent
+  `~/Library/LaunchAgents/io.github.s_vin.x_proxy_router.plist` — «объекты входа» из
+  настроек системы не умеют передавать приложению аргументы. Приложение стартует с
+  `--hidden`: без окна, только иконка. Запись указывает на тот файл, который запускает
+  пользователь (AppImage, портативный exe, приложение в `Applications`); если его
+  перенесли, она исправляется при запуске.
 - **Остановка.** При выходе приложение закрывает stdin сервера, и тот штатно
   останавливает ядро и закрывает базу (`XPR_STOP_ON_STDIN_CLOSE`, `server/README.md`).
   Если Electron упал или его сняли, pipe закрывает ОС — сервер не остаётся сиротой.
@@ -52,7 +59,9 @@ Electron-обвязка: одно приложение для Windows и Linux, 
 автозапуска, если её включали, снимается флажком в трее. Flatpak:
 `flatpak uninstall --delete-data io.github.s_vin.x_proxy_router`. AppImage — удалить
 файл, `~/.config/x-proxy-router` и, если включали автозапуск,
-`~/.config/autostart/x-proxy-router.desktop`.
+`~/.config/autostart/x-proxy-router.desktop`. macOS: у образа нет деинсталлятора —
+приложение переносят в корзину, а `~/Library/Application Support/x-proxy-router` и
+файл автозапуска из `~/Library/LaunchAgents` удаляют вручную.
 
 ## Разработка
 
@@ -92,15 +101,15 @@ Electron — в `~/.config/x-proxy-router-dev`. Другую папку данн
 
 Пакеты собирает workflow «Desktop application» в GitHub Actions
 (`.github/workflows/desktop.yml`), только вручную: Actions → Desktop application →
-Run workflow. Четыре задания — Windows и Linux, x64 и arm64 — идут на машинах своей ОС
-и архитектуры. Готовые файлы — артефакты запуска `x-proxy-router-<os>-<arch>`, по два
-файла в каждом.
+Run workflow. Шесть заданий — Windows, Linux и macOS, x64 и arm64 — идут на машинах
+своей ОС и архитектуры. Готовые файлы — артефакты запуска `x-proxy-router-<os>-<arch>`:
+по два файла для Windows и Linux, один образ для macOS.
 
 Шаги задания:
 
 1. `web/`: `npm ci && npm run build`.
 2. `npm run icons`, `npm run build` — иконки и main-процесс в `dist/`.
-3. `npm run backend -- --os <linux|win> --arch <x64|arm64>` — `scripts/prepare-backend.py`
+3. `npm run backend -- --os <linux|win|mac> --arch <x64|arm64>` — `scripts/prepare-backend.py`
    собирает `build/backend/<os>-<arch>` с той же раскладкой, что в репозитории и в Docker:
    `python/` (переносимый CPython из
    [python-build-standalone](https://github.com/astral-sh/python-build-standalone) с
@@ -112,16 +121,39 @@ Run workflow. Четыре задания — Windows и Linux, x64 и arm64 —
    и собирает пакеты в `release/`.
 5. Проверка: собранное приложение запускается с `--smoke-test` — поднимает сервер с
    ядром, загружает страницу, подключается по WebSocket и выходит с кодом 0. В Linux так
-   же проверяются AppImage и установленный Flatpak.
+   же проверяются AppImage и установленный Flatpak, в macOS — приложение из
+   смонтированного образа.
+6. Только в macOS: тесты сервера (`server/tests`) — другого места прогнать их на этой
+   ОС нет.
 
 Сборки не подписаны: Windows SmartScreen при первом запуске покажет предупреждение.
 Портативный exe при каждом запуске распаковывается во временную папку, поэтому
 стартует медленнее установленного.
 
+### macOS
+
+Сертификата Apple нет, поэтому у приложения подпись ad-hoc (`mac.identity: '-'` в
+`electron-builder.yml`): без неё Mac с Apple silicon не запускает код вообще. Подписываются
+и исполняемые файлы сервера — Python, его модули-расширения и ядро; остальные файлы
+сервера входят в подпись приложения как обычные ресурсы (`mac.signIgnore`).
+
+Скачанное приложение macOS при первом запуске блокирует: «Apple could not verify…».
+Чтобы открыть его, нужно перетащить приложение из образа в `Applications`, запустить,
+затем в «Системные настройки → Конфиденциальность и безопасность» нажать «Всё равно
+открыть». То же одной командой:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/X Proxy Router.app"
+```
+
+Чтобы предупреждения не было, нужны подпись Developer ID и нотаризация (платная
+программа Apple Developer): сертификат и ключ нотаризации передаются electron-builder
+переменными окружения, в `electron-builder.yml` убираются `identity` и `hardenedRuntime`.
+
 Flatpak — одиночный файл: `flatpak install --user x-proxy-router-*.flatpak`; среда
 `org.freedesktop.Platform` ставится с Flathub. Пакету разрешены сеть (inbound слушают
 порты компьютера), трей и папка `~/.config/autostart`.
 
-Обновление Python: новые версия, тег релиза и SHA-256 четырёх архивов
+Обновление Python: новые версия, тег релиза и SHA-256 шести архивов
 `install_only_stripped` в `scripts/prepare-backend.py`. Версия приложения — `version`
 в `package.json`.

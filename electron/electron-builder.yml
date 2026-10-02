@@ -40,6 +40,30 @@ nsis:
 portable:
   artifactName: x-proxy-router-${version}-windows-${arch}-portable.${ext}
 
+mac:
+  target:
+    - dmg
+  icon: build/icon.png
+  category: public.app-category.utilities
+  # No certificate of Apple: an ad-hoc signature, without which a Mac with Apple silicon
+  # does not run the code at all. A downloaded application still has to be allowed by
+  # the user (README.md).
+  identity: '-'
+  # Serves notarization; with an ad-hoc signature it stops Electron and Python from
+  # loading their libraries.
+  hardenedRuntime: false
+  # Of the server only the executable files are signed: Python, its extension modules
+  # and the core. The rest, thousands of files, is covered by the signature of the
+  # application like any resource.
+  signIgnore:
+    - '/Contents/Resources/backend/(?!.*(\.so|\.dylib|/bin/python[^/]*|/mihomo)$)'
+
+# The application to drag into Applications.
+dmg:
+  artifactName: x-proxy-router-${version}-macos-${arch}.${ext}
+  # No updates: no file that describes the image for them.
+  writeUpdateInfo: false
+
 linux:
   target:
     - AppImage
