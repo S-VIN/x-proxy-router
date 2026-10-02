@@ -49,7 +49,8 @@ jobs:
             web/package-lock.json
             electron/package-lock.json
 
-      - uses: astral-sh/setup-uv@v10
+      # setup-uv has no moving major tag: only full versions exist.
+      - uses: astral-sh/setup-uv@v10.2.0
 
       # Flatpak for the package, the libraries Electron needs and a display for the checks.
       - name: Linux tools
