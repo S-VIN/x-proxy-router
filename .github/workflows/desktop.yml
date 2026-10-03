@@ -62,12 +62,13 @@ jobs:
       # setup-uv has no moving major tag: only full versions exist.
       - uses: astral-sh/setup-uv@v10.2.0
 
-      # Flatpak for the package, the libraries Electron needs and a display for the checks.
+      # Flatpak for the package, bsdtar and zstd that fpm makes the pacman package with,
+      # the libraries Electron needs and a display for the checks.
       - name: Linux tools
         if: matrix.os == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y flatpak flatpak-builder xvfb dbus-daemon \
+          sudo apt-get install -y flatpak flatpak-builder libarchive-tools zstd xvfb dbus-daemon \
             libgtk-3-0t64 libnss3 libasound2t64 libgbm1
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           # Ubuntu does not let unprivileged programs make sandboxes, which Flatpak needs.
@@ -135,6 +136,19 @@ jobs:
             flatpak run io.github.s_vin.x_proxy_router --smoke-test --no-sandbox \
             || { cat ~/.var/app/io.github.s_vin.x_proxy_router/config/x-proxy-router/logs/server.log; exit 1; }
 
+      # Installed as Arch Linux installs it: pacman takes the dependencies the package names
+      # from the repositories, and the application starts with only them. Arch Linux has
+      # images for x86_64 only; the arm64 package has the same files and dependencies.
+      - name: Check the pacman package
+        if: matrix.os == 'linux' && matrix.arch == 'x64'
+        working-directory: electron
+        run: |
+          docker run --rm --shm-size=1g -v "$PWD/release:/release:ro" archlinux:latest bash -c '
+            pacman -Syu --noconfirm xorg-server-xvfb xorg-xauth \
+              && pacman -U --noconfirm /release/*.pkg.tar.zst \
+              && XPR_DESKTOP_DATA_DIR=/tmp/data xvfb-run -a x-proxy-router --smoke-test --no-sandbox \
+              || { cat /tmp/data/logs/server.log; exit 1; }'
+
       - name: Check the application (Windows)
         if: matrix.os == 'win'
         working-directory: electron
@@ -187,4 +201,5 @@ jobs:
             electron/release/*.dmg
             electron/release/*.AppImage
             electron/release/*.flatpak
+            electron/release/*.pkg.tar.zst
           if-no-files-found: error

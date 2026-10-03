@@ -10,6 +10,7 @@ Electron-обвязка: одно приложение для Windows, Linux и 
 | Портативный Windows | `x-proxy-router-<версия>-windows-<arch>-portable.exe` | папка `data` рядом с exe                                          |
 | AppImage            | `x-proxy-router-<версия>-linux-<arch>.AppImage`       | `~/.config/x-proxy-router`                                        |
 | Flatpak             | `x-proxy-router-<версия>-linux-<arch>.flatpak`        | `~/.var/app/io.github.s_vin.x_proxy_router/config/x-proxy-router` |
+| Пакет Arch Linux    | `x-proxy-router-<версия>-linux-<arch>.pkg.tar.zst`    | `~/.config/x-proxy-router`                                        |
 | Образ macOS         | `x-proxy-router-<версия>-macos-<arch>.dmg`            | `~/Library/Application Support/x-proxy-router`                    |
 
 Каждый вариант собирается под x64 и arm64 (у Mac это Intel и Apple silicon). В папке
@@ -59,7 +60,9 @@ Electron-обвязка: одно приложение для Windows, Linux и 
 автозапуска, если её включали, снимается флажком в трее. Flatpak:
 `flatpak uninstall --delete-data io.github.s_vin.x_proxy_router`. AppImage — удалить
 файл, `~/.config/x-proxy-router` и, если включали автозапуск,
-`~/.config/autostart/x-proxy-router.desktop`. macOS: у образа нет деинсталлятора —
+`~/.config/autostart/x-proxy-router.desktop`. Пакет Arch Linux удаляет
+`sudo pacman -R x-proxy-router`, папку данных и файл автозапуска — вручную, как у
+AppImage. macOS: у образа нет деинсталлятора —
 приложение переносят в корзину, а `~/Library/Application Support/x-proxy-router` и
 файл автозапуска из `~/Library/LaunchAgents` удаляют вручную.
 
@@ -134,7 +137,7 @@ Electron — в `~/.config/x-proxy-router-dev`. Другую папку данн
 (`.github/workflows/desktop.yml`), только вручную: Actions → Desktop application →
 Run workflow. Шесть заданий — Windows, Linux и macOS, x64 и arm64 — идут на машинах
 своей ОС и архитектуры. Готовые файлы — артефакты запуска `x-proxy-router-<os>-<arch>`:
-по два файла для Windows и Linux, один образ для macOS.
+два файла для Windows, три для Linux, один образ для macOS.
 
 Шаги задания:
 
@@ -152,7 +155,8 @@ Run workflow. Шесть заданий — Windows, Linux и macOS, x64 и arm6
    и собирает пакеты в `release/`.
 5. Проверка: собранное приложение запускается с `--smoke-test` — поднимает сервер с
    ядром, загружает страницу, подключается по WebSocket и выходит с кодом 0. В Linux так
-   же проверяются AppImage и установленный Flatpak, в macOS — приложение из
+   же проверяются AppImage, установленный Flatpak и, на x64, пакет pacman, установленный
+   в контейнере Arch Linux со своими зависимостями из репозиториев; в macOS — приложение из
    смонтированного образа.
 6. Только в macOS: тесты сервера (`server/tests`) — другого места прогнать их на этой
    ОС нет.
@@ -184,6 +188,15 @@ xattr -dr com.apple.quarantine "/Applications/X Proxy Router.app"
 Flatpak — одиночный файл: `flatpak install --user x-proxy-router-*.flatpak`; среда
 `org.freedesktop.Platform` ставится с Flathub. Пакету разрешены сеть (inbound слушают
 порты компьютера), трей и папка `~/.config/autostart`.
+
+Пакет Arch Linux — для Arch и дистрибутивов на его основе (Manjaro, EndeavourOS, CachyOS):
+`sudo pacman -U x-proxy-router-*.pkg.tar.zst`. Приложение ставится в `/opt/X Proxy Router`
+с командой `x-proxy-router` и пунктом меню, библиотеки, которые нужны Electron (GTK, NSS,
+ALSA, Mesa и другие, `pacman.depends` в `electron-builder.yml`), pacman берёт из
+репозиториев. Пакет собирает fpm, которому нужны `bsdtar` и `zstd`. Для других
+дистрибутивов он не предназначен: распакованный как архив, он запускается, но без пункта
+меню, а там, где Chromium не может сделать песочницу (Ubuntu 24.04 и новее), только с
+`--no-sandbox`. Для них — AppImage.
 
 Обновление Python: новые версия, тег релиза и SHA-256 шести архивов
 `install_only_stripped` в `scripts/prepare-backend.py`. Версия приложения — `version`

@@ -68,6 +68,7 @@ linux:
   target:
     - AppImage
     - flatpak
+    - pacman
   executableName: x-proxy-router
   # The desktop entry is named after desktopName of package.json, which Electron uses
   # as the window's application id: the desktop then shows the icon of the entry.
@@ -95,3 +96,26 @@ flatpak:
     - --talk-name=org.kde.StatusNotifierWatcher
     # "Launch at login" writes a desktop entry there (src/autostart.ts).
     - --filesystem=xdg-config/autostart:create
+
+# The package of Arch Linux and the distributions based on it: pacman -U installs it in
+# /opt with a command and a menu entry, and the libraries it needs.
+pacman:
+  artifactName: x-proxy-router-${version}-linux-${arch}.pkg.tar.zst
+  compression: zstd
+  # The packager field of the package; electron-builder takes it from an author's email.
+  maintainer: S-VIN
+  # No updates: pacman updates the package; no file that describes it for them.
+  publish: null
+  # The packages of the libraries that Electron is linked with (those of electron-builder
+  # are of an older Electron and some are gone from Arch); the server's Python and the
+  # core bring their own.
+  depends:
+    - gtk3
+    - nss
+    - alsa-lib
+    - at-spi2-core
+    - libcups
+    - libxkbcommon
+    - mesa
+    # Links of the interface and "Show log" open through it.
+    - xdg-utils
