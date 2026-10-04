@@ -57,9 +57,9 @@ python3 scripts/download-mihomo.py
 ```
 
 На Windows используйте `py -3` вместо `python3`. Версия и SHA-256 архивов
-закреплены в скрипте; он проверяет архив перед распаковкой, перезаписывает
-бинарники и выставляет бинарникам Linux и macOS права `0755`. Для обновления версии
-нужно обновить версию и SHA-256 в скрипте из официального релиза.
+закреплены в `build.json` (`mihomo`); скрипт проверяет архив перед распаковкой,
+перезаписывает бинарники и выставляет бинарникам Linux и macOS права `0755`. Для
+обновления нужно обновить там версию и SHA-256 из официального релиза.
 
 ### Использование сервером, Docker и Electron
 
@@ -110,6 +110,45 @@ SOCKS5/HTTP-прокси `127.0.0.1:20808`) и регистрируются со
 [`server/README.md`](server/README.md).
 Протокол между клиентами и сервером: [`server/PROTOCOL.md`](server/PROTOCOL.md).
 
+## Переменные сборки
+
+Всё, что задаёт сборки — десктопные пакеты всех платформ и образ Docker, — записано в
+одном файле [`build.json`](build.json). Его читает `scripts/build-config.mjs`: он
+вычисляет из переменных остальные значения и отдаёт их конфигурации electron-builder
+(`electron/electron-builder.config.mjs`), main-процессу приложения и workflow
+(`node scripts/build-config.mjs github`) и Docker (`node scripts/build-config.mjs docker`).
+Python-скрипты читают `build.json` сами.
+
+| Переменная | Сейчас | На что влияет |
+| --- | --- | --- |
+| `name` | `x-proxy-router` | имена файлов пакетов и артефактов CI, команда и пакет pacman в Linux, папка данных (`%APPDATA%\x-proxy-router`, `~/.config/x-proxy-router`) |
+| `productName` | `X Proxy Router` | имя в меню, окнах и трее, `X Proxy Router.exe` и `.app`, папка `/opt/X Proxy Router` |
+| `version` | `0.1.0` | версия всех пакетов и их имён |
+| `description` | одна строка | описание приложения в пакетах и в пункте меню Linux |
+| `author` | `S-VIN` | автор и издатель, `Copyright © <год сборки> <author>`, packager пакета pacman |
+| `license` | `MIT` | лицензия в пакетах |
+| `repository` | `https://github.com/S-VIN/x-proxy-router` | домашняя страница пакетов и id приложения `io.github.<владелец>.<репозиторий>` (`io.github.s_vin.x_proxy_router`): id Flatpak, bundle macOS, AppUserModelID Windows, записи автозапуска |
+| `node` | `24` | Node.js в CI и образ `node:<версия>-alpine` в Docker |
+| `uv` | `0.12` | uv в CI и образ `ghcr.io/astral-sh/uv:<версия>` в Docker |
+| `python.version`, `.release`, `.sha256` | `3.12.15`, `20261001`, хеши шести архивов | Python внутри десктопных пакетов ([python-build-standalone](https://github.com/astral-sh/python-build-standalone)); в Docker — образ `python:<major.minor>-slim` |
+| `mihomo.version`, `.sha256` | `1.19.31`, хеши шести архивов | бинарники Mihomo (`scripts/download-mihomo.py`) |
+| `windows.runners`, `macos.runners`, `linux.runners` | метка раннера GitHub на архитектуру | задания workflow «Desktop application»: ключи — архитектуры сборки; образ Docker собирается под архитектуры Linux |
+| `windows.oneClick`, `.perMachine`, `.deleteAppDataOnUninstall` | `true`, `false`, `true` | инсталлер: без вопросов, для текущего пользователя без прав администратора, удаление стирает настройки и автозапуск |
+| `macos.category` | `public.app-category.utilities` | категория приложения |
+| `macos.identity` | `-` | подпись: `-` — ad-hoc; имя сертификата Developer ID или `null` (найти самому) — настоящая, тогда включается hardened runtime |
+| `linux.category` | `Network` | раздел меню |
+| `linux.flatpak.version` | `25.08` | версия среды `org.freedesktop.Platform` и базы Electron |
+| `linux.flatpak.permissions` | список | права Flatpak: окно (Wayland, X11, IPC, GPU), сеть (inbound слушают порты, ядро подключается к серверам), трей, папка автозапуска |
+| `linux.pacman.depends` | список | пакеты Arch с библиотеками, с которыми слинкован Electron; `xdg-utils` открывает ссылки |
+
+Смена `name` или `repository` после выпуска переносит папку данных и id приложения: у
+пользователей пропадут настройки и останутся старые записи автозапуска.
+
+Вне `build.json` остаются версии зависимостей — Electron и других пакетов npm
+(`package.json` и `package-lock.json`), Python-пакетов (`uv.lock`) — и версии GitHub
+Actions в workflow: их меняют npm, uv и сам workflow. Как именно собирается каждый
+формат (цели, файлы, подпись) — в `electron/electron-builder.config.mjs`.
+
 ## Docker
 
 Для сервера приложение запускается в Docker: образ собирает workflow «Docker image» в
@@ -121,8 +160,8 @@ GitHub Actions (только вручную) и публикует в `ghcr.io/s
 
 Папка [`electron`](electron) — приложение для Windows, Linux и macOS (x64 и arm64):
 запускает сервер с ядром и показывает веб-интерфейс в своём окне, при закрытии окна
-остаётся в трее. Варианты: инсталлер и портативный exe для Windows, AppImage и Flatpak
-для Linux, образ DMG для macOS.
+остаётся в трее. Варианты: инсталлер и портативный exe для Windows, AppImage, Flatpak и
+пакет pacman для Linux, образ DMG для macOS.
 Их собирает workflow «Desktop application» в GitHub Actions (только вручную), файлы —
 в артефактах запуска. Запуск для разработки:
 

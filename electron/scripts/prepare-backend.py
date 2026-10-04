@@ -15,6 +15,7 @@ to GitHub and PyPI; uses only Python's standard library.
 
 import argparse
 import hashlib
+import json
 import platform
 import shutil
 import subprocess
@@ -27,38 +28,26 @@ ELECTRON = Path(__file__).resolve().parents[1]
 ROOT = ELECTRON.parent
 CACHE = ELECTRON / "build" / "cache"
 
+# The variables of the builds (README.md): here the name, the version of Python and the
+# digests of its archives.
+BUILD = json.loads((ROOT / "build.json").read_text(encoding="utf-8"))
+
 # https://github.com/astral-sh/python-build-standalone: CPython that runs from any
-# folder. The digests are the ones GitHub publishes for the release.
-PYTHON_VERSION = "3.12.15"
-PYTHON_RELEASE = "20261001"
+# folder. The digests in build.json are the ones GitHub publishes for the release.
+PYTHON_VERSION = BUILD["python"]["version"]
+PYTHON_RELEASE = BUILD["python"]["release"]
 PYTHON_URL = "https://github.com/astral-sh/python-build-standalone/releases/download"
-# (os, arch) as electron-builder names them: the build's triple and its archive digest.
-PYTHONS = {
-    ("linux", "x64"): (
-        "x86_64-unknown-linux-gnu",
-        "7bb1659e3235077b7f63d5b6eb6ce653c6fcd6c5041e9d5f73b42ce10421464d",
-    ),
-    ("linux", "arm64"): (
-        "aarch64-unknown-linux-gnu",
-        "0b35f4dc08d58534eb82e024989e2db9873885dccd4f2a316ff55c0cec146123",
-    ),
-    ("win", "x64"): (
-        "x86_64-pc-windows-msvc",
-        "52124cee54126f3f360eaa378288f6f64c402c983a3c14c95eff67f4af986aaa",
-    ),
-    ("win", "arm64"): (
-        "aarch64-pc-windows-msvc",
-        "2b7d0422475973a90fb0817e9062a00ee745c46a3376c46e7a397ab0e345881e",
-    ),
-    ("mac", "x64"): (
-        "x86_64-apple-darwin",
-        "d101ac54bc34afff54741406261325dc896b7b646a36a58fff4845ef0a00b2ce",
-    ),
-    ("mac", "arm64"): (
-        "aarch64-apple-darwin",
-        "10cab8f6ed6202fdd81637aa6eda4af8d5b7eaa8fc42f9df3c6bea4923de0d93",
-    ),
+# (os, arch) as electron-builder names them: the triple of the build.
+PYTHON_TRIPLES = {
+    ("linux", "x64"): "x86_64-unknown-linux-gnu",
+    ("linux", "arm64"): "aarch64-unknown-linux-gnu",
+    ("win", "x64"): "x86_64-pc-windows-msvc",
+    ("win", "arm64"): "aarch64-pc-windows-msvc",
+    ("mac", "x64"): "x86_64-apple-darwin",
+    ("mac", "arm64"): "aarch64-apple-darwin",
 }
+# The systems as build.json names them.
+SYSTEMS = {"linux": "linux", "win": "windows", "mac": "macos"}
 # Folder of the core in resources/mihomo, named as Node.js names the platform.
 MIHOMO_SYSTEMS = {"linux": "linux", "win": "win32", "mac": "darwin"}
 
@@ -129,7 +118,7 @@ def download(url: str, digest: str) -> Path:
     if target.is_file() and hashlib.sha256(target.read_bytes()).hexdigest() == digest:
         return target
     print(f"Downloading {url}", flush=True)
-    with urlopen(Request(url, headers={"User-Agent": "x-proxy-router"}), timeout=300) as response:
+    with urlopen(Request(url, headers={"User-Agent": BUILD["name"]}), timeout=300) as response:
         data = response.read()
     if hashlib.sha256(data).hexdigest() != digest:
         raise RuntimeError(f"SHA256 mismatch: {url}")
@@ -149,11 +138,10 @@ def remove(directory: Path, patterns: list[str]) -> None:
 
 def stage_python(stage: Path, system: str, arch: str) -> Path:
     """Unpack Python without what the server does not use; returns the standard library."""
-    triple, digest = PYTHONS[system, arch]
     archive = download(
         f"{PYTHON_URL}/{PYTHON_RELEASE}/cpython-{PYTHON_VERSION}+{PYTHON_RELEASE}"
-        f"-{triple}-install_only_stripped.tar.gz",
-        digest,
+        f"-{PYTHON_TRIPLES[system, arch]}-install_only_stripped.tar.gz",
+        BUILD["python"]["sha256"][f"{SYSTEMS[system]}-{arch}"],
     )
     with tarfile.open(archive) as tar:
         tar.extractall(stage, filter="data")  # Everything is inside python/.
@@ -231,7 +219,7 @@ def main() -> None:
     stage.mkdir(parents=True)
 
     library = stage_python(stage, system, arch)
-    install_packages(library, PYTHONS[system, arch][0])
+    install_packages(library, PYTHON_TRIPLES[system, arch])
     stage_application(stage, system, arch)
     if (system, arch) == host:
         compile_and_check(stage, system, library)

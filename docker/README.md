@@ -32,10 +32,11 @@ echo <токен> | docker login ghcr.io -u <логин GitHub> --password-stdin
 Пакет можно сделать публичным: **Package settings → Change visibility**. Тогда вход
 не нужен.
 
-Собрать образ локально можно из корня репозитория:
+Собрать образ локально можно из корня репозитория. Версии Node.js, Python и uv
+Dockerfile получает аргументами из `build.json`, их подставляет `scripts/build-config.mjs`:
 
 ```sh
-docker build -f docker/Dockerfile -t ghcr.io/s-vin/x-proxy-router:latest .
+docker build $(node scripts/build-config.mjs docker) -f docker/Dockerfile -t ghcr.io/s-vin/x-proxy-router:latest .
 ```
 
 ## Запуск на сервере

@@ -10,50 +10,44 @@ permissions:
   contents: read
 
 jobs:
+  # The variables of build.json for the jobs below (scripts/build-config.mjs).
+  config:
+    runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.config.outputs.name }}
+      product_name: ${{ steps.config.outputs.product_name }}
+      app_id: ${{ steps.config.outputs.app_id }}
+      node: ${{ steps.config.outputs.node }}
+      uv: ${{ steps.config.outputs.uv }}
+      jobs: ${{ steps.config.outputs.jobs }}
+    steps:
+      # build.json is in the root, which a sparse checkout always has.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts
+      - id: config
+        run: node scripts/build-config.mjs github >> "$GITHUB_OUTPUT"
+
+  # One job per OS and architecture: the runners of build.json.
   build:
+    needs: config
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: Linux x64
-            runner: ubuntu-24.04
-            os: linux
-            arch: x64
-            unpacked: linux-unpacked
-          - name: Linux arm64
-            runner: ubuntu-24.04-arm
-            os: linux
-            arch: arm64
-            unpacked: linux-arm64-unpacked
-          - name: Windows x64
-            runner: windows-latest
-            os: win
-            arch: x64
-            unpacked: win-unpacked
-          - name: Windows arm64
-            runner: windows-11-arm
-            os: win
-            arch: arm64
-            unpacked: win-arm64-unpacked
-          - name: macOS x64
-            runner: macos-26-intel
-            os: mac
-            arch: x64
-            unpacked: mac
-          - name: macOS arm64
-            runner: macos-26
-            os: mac
-            arch: arm64
-            unpacked: mac-arm64
+        include: ${{ fromJSON(needs.config.outputs.jobs) }}
+    env:
+      BUILD_NAME: ${{ needs.config.outputs.name }}
+      BUILD_PRODUCT_NAME: ${{ needs.config.outputs.product_name }}
+      BUILD_APP_ID: ${{ needs.config.outputs.app_id }}
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: ${{ needs.config.outputs.node }}
           cache: npm
           cache-dependency-path: |
             web/package-lock.json
@@ -61,6 +55,8 @@ jobs:
 
       # setup-uv has no moving major tag: only full versions exist.
       - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: ${{ needs.config.outputs.uv }}
 
       # Flatpak for the package, bsdtar and zstd that fpm makes the pacman package with,
       # the libraries Electron needs and a display for the checks.
@@ -98,7 +94,7 @@ jobs:
         working-directory: electron
         run: npm run backend -- --os ${{ matrix.os }} --arch ${{ matrix.arch }}
 
-      # The targets of this OS from electron-builder.yml.
+      # The targets of this OS from electron-builder.config.mjs.
       - name: Packages
         working-directory: electron
         env:
@@ -112,7 +108,7 @@ jobs:
         working-directory: electron
         run: |
           export XPR_DESKTOP_DATA_DIR="$RUNNER_TEMP/unpacked"
-          xvfb-run -a "release/${{ matrix.unpacked }}/x-proxy-router" --smoke-test --no-sandbox \
+          xvfb-run -a "release/${{ matrix.unpacked }}/$BUILD_NAME" --smoke-test --no-sandbox \
             || { cat "$XPR_DESKTOP_DATA_DIR/logs/server.log"; exit 1; }
 
       - name: Check the AppImage
@@ -133,8 +129,8 @@ jobs:
         run: |
           flatpak install --user -y release/*.flatpak
           dbus-run-session -- xvfb-run -a \
-            flatpak run io.github.s_vin.x_proxy_router --smoke-test --no-sandbox \
-            || { cat ~/.var/app/io.github.s_vin.x_proxy_router/config/x-proxy-router/logs/server.log; exit 1; }
+            flatpak run "$BUILD_APP_ID" --smoke-test --no-sandbox \
+            || { cat ~/.var/app/"$BUILD_APP_ID"/config/"$BUILD_NAME"/logs/server.log; exit 1; }
 
       # Installed as Arch Linux installs it: pacman takes the dependencies the package names
       # from the repositories, and the application starts with only them. Arch Linux has
@@ -143,10 +139,10 @@ jobs:
         if: matrix.os == 'linux' && matrix.arch == 'x64'
         working-directory: electron
         run: |
-          docker run --rm --shm-size=1g -v "$PWD/release:/release:ro" archlinux:latest bash -c '
+          docker run --rm --shm-size=1g -e BUILD_NAME -v "$PWD/release:/release:ro" archlinux:latest bash -c '
             pacman -Syu --noconfirm xorg-server-xvfb xorg-xauth \
               && pacman -U --noconfirm /release/*.pkg.tar.zst \
-              && XPR_DESKTOP_DATA_DIR=/tmp/data xvfb-run -a x-proxy-router --smoke-test --no-sandbox \
+              && XPR_DESKTOP_DATA_DIR=/tmp/data xvfb-run -a "$BUILD_NAME" --smoke-test --no-sandbox \
               || { cat /tmp/data/logs/server.log; exit 1; }'
 
       - name: Check the application (Windows)
@@ -155,7 +151,7 @@ jobs:
         shell: pwsh
         run: |
           $env:XPR_DESKTOP_DATA_DIR = "$env:RUNNER_TEMP\unpacked"
-          $process = Start-Process -FilePath "release\${{ matrix.unpacked }}\X Proxy Router.exe" `
+          $process = Start-Process -FilePath "release\${{ matrix.unpacked }}\${env:BUILD_PRODUCT_NAME}.exe" `
             -ArgumentList "--smoke-test" -Wait -PassThru
           if ($process.ExitCode -ne 0) {
             Get-Content "$env:XPR_DESKTOP_DATA_DIR\logs\server.log" -ErrorAction SilentlyContinue
@@ -167,10 +163,10 @@ jobs:
         if: matrix.os == 'mac'
         working-directory: electron
         run: |
-          app="release/${{ matrix.unpacked }}/X Proxy Router.app"
+          app="release/${{ matrix.unpacked }}/$BUILD_PRODUCT_NAME.app"
           codesign --verify --deep --strict --verbose=2 "$app"
           export XPR_DESKTOP_DATA_DIR="$RUNNER_TEMP/unpacked"
-          "$app/Contents/MacOS/X Proxy Router" --smoke-test \
+          "$app/Contents/MacOS/$BUILD_PRODUCT_NAME" --smoke-test \
             || { cat "$XPR_DESKTOP_DATA_DIR/logs/server.log"; exit 1; }
 
       # The application as the user gets it: started from the read-only image.
@@ -180,7 +176,7 @@ jobs:
         run: |
           hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/image" release/*.dmg
           export XPR_DESKTOP_DATA_DIR="$RUNNER_TEMP/image-data"
-          "$RUNNER_TEMP/image/X Proxy Router.app/Contents/MacOS/X Proxy Router" --smoke-test \
+          "$RUNNER_TEMP/image/$BUILD_PRODUCT_NAME.app/Contents/MacOS/$BUILD_PRODUCT_NAME" --smoke-test \
             || { cat "$XPR_DESKTOP_DATA_DIR/logs/server.log"; exit 1; }
           hdiutil detach "$RUNNER_TEMP/image"
 
@@ -195,7 +191,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: ${{ !cancelled() }}
         with:
-          name: x-proxy-router-${{ matrix.os }}-${{ matrix.arch }}
+          name: ${{ env.BUILD_NAME }}-${{ matrix.os }}-${{ matrix.arch }}
           path: |
             electron/release/*.exe
             electron/release/*.dmg

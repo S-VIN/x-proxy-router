@@ -116,27 +116,27 @@ npm run format:check  # стиль (Prettier); npm run format — исправи
 Electron — в `~/.config/x-proxy-router-dev`. Другую папку данных задаёт
 `XPR_DESKTOP_DATA_DIR`. F12 открывает DevTools, F5 перезагружает страницу.
 
-| Файл                                    | Ответственность                                                            |
-| --------------------------------------- | -------------------------------------------------------------------------- |
-| `src/main.ts`                           | Жизненный цикл: запуск сервера, окно, трей, выход, проверка `--smoke-test` |
-| `src/paths.ts`                          | Папка данных и расположение сервера и Python: в репозитории и в пакете     |
-| `src/backend.ts`                        | Процесс сервера: свободный порт, ожидание готовности, остановка            |
-| `src/logFile.ts`                        | Лог сервера с ограничением размера и последними строками для окна ошибки   |
-| `src/window.ts`                         | Окно интерфейса                                                            |
-| `src/tray.ts`                           | Иконка и меню трея, проверка, что трей есть                                |
-| `src/linkWatcher.ts`                    | Состояние подключения по WebSocket для иконки трея                         |
-| `src/autostart.ts`                      | Запуск при входе в систему                                                 |
-| `scripts/make-icons.mjs`                | Иконки приложения и трея из логотипа `web/src/lib/logo.ts`                 |
-| `scripts/build.mjs`                     | Сборка main-процесса в `dist/main.cjs` (esbuild)                           |
-| `scripts/prepare-backend.py`            | Сервер с Python и ядром для упаковки                                       |
-| `electron-builder.yml`, `installer.nsh` | Упаковка                                                                   |
+| Файл                                           | Ответственность                                                            |
+| ---------------------------------------------- | -------------------------------------------------------------------------- |
+| `src/main.ts`                                  | Жизненный цикл: запуск сервера, окно, трей, выход, проверка `--smoke-test` |
+| `src/paths.ts`                                 | Папка данных и расположение сервера и Python: в репозитории и в пакете     |
+| `src/backend.ts`                               | Процесс сервера: свободный порт, ожидание готовности, остановка            |
+| `src/logFile.ts`                               | Лог сервера с ограничением размера и последними строками для окна ошибки   |
+| `src/window.ts`                                | Окно интерфейса                                                            |
+| `src/tray.ts`                                  | Иконка и меню трея, проверка, что трей есть                                |
+| `src/linkWatcher.ts`                           | Состояние подключения по WebSocket для иконки трея                         |
+| `src/autostart.ts`                             | Запуск при входе в систему                                                 |
+| `scripts/make-icons.mjs`                       | Иконки приложения и трея из логотипа `web/src/lib/logo.ts`                 |
+| `scripts/build.mjs`                            | Сборка main-процесса в `dist/main.cjs` (esbuild)                           |
+| `scripts/prepare-backend.py`                   | Сервер с Python и ядром для упаковки                                       |
+| `electron-builder.config.mjs`, `installer.nsh` | Упаковка; имена, версия и остальные переменные — из `build.json` в корне   |
 
 ## Сборка пакетов
 
 Пакеты собирает workflow «Desktop application» в GitHub Actions
 (`.github/workflows/desktop.yml`), только вручную: Actions → Desktop application →
 Run workflow. Шесть заданий — Windows, Linux и macOS, x64 и arm64 — идут на машинах
-своей ОС и архитектуры. Готовые файлы — артефакты запуска `x-proxy-router-<os>-<arch>`:
+своей ОС и архитектуры; задания и их раннеры workflow берёт из `build.json`. Готовые файлы — артефакты запуска `x-proxy-router-<os>-<arch>`:
 два файла для Windows, три для Linux, один образ для macOS.
 
 Шаги задания:
@@ -148,7 +148,7 @@ Run workflow. Шесть заданий — Windows, Linux и macOS, x64 и arm6
    `python/` (переносимый CPython из
    [python-build-standalone](https://github.com/astral-sh/python-build-standalone) с
    пакетами из `uv.lock`), `server/`, `web/dist/` и один бинарник Mihomo. Версия Python
-   и SHA-256 архивов закреплены в скрипте; пакеты ставятся готовыми wheels целевой
+   и SHA-256 архивов закреплены в `build.json`; пакеты ставятся готовыми wheels целевой
    платформы с проверкой хешей. Лишнее (Tk, тесты, pip) удаляется, модули
    компилируются в `.pyc`: установленное приложение доступно только на чтение.
 4. `npm run dist -- --<arch>` — electron-builder кладёт эту папку в ресурсы как `backend`
@@ -167,8 +167,8 @@ Run workflow. Шесть заданий — Windows, Linux и macOS, x64 и arm6
 
 ### macOS
 
-Сертификата Apple нет, поэтому у приложения подпись ad-hoc (`mac.identity: '-'` в
-`electron-builder.yml`): без неё Mac с Apple silicon не запускает код вообще. Подписываются
+Сертификата Apple нет, поэтому у приложения подпись ad-hoc (`macos.identity: "-"` в
+`build.json`): без неё Mac с Apple silicon не запускает код вообще. Подписываются
 и исполняемые файлы сервера — Python, его модули-расширения и ядро; остальные файлы
 сервера входят в подпись приложения как обычные ресурсы (`mac.signIgnore`).
 
@@ -183,7 +183,8 @@ xattr -dr com.apple.quarantine "/Applications/X Proxy Router.app"
 
 Чтобы предупреждения не было, нужны подпись Developer ID и нотаризация (платная
 программа Apple Developer): сертификат и ключ нотаризации передаются electron-builder
-переменными окружения, в `electron-builder.yml` убираются `identity` и `hardenedRuntime`.
+переменными окружения, а `macos.identity` в `build.json` становится именем сертификата или
+`null`; hardened runtime тогда включается сам.
 
 Flatpak — одиночный файл: `flatpak install --user x-proxy-router-*.flatpak`; среда
 `org.freedesktop.Platform` ставится с Flathub. Пакету разрешены сеть (inbound слушают
@@ -192,12 +193,12 @@ Flatpak — одиночный файл: `flatpak install --user x-proxy-router-
 Пакет Arch Linux — для Arch и дистрибутивов на его основе (Manjaro, EndeavourOS, CachyOS):
 `sudo pacman -U x-proxy-router-*.pkg.tar.zst`. Приложение ставится в `/opt/X Proxy Router`
 с командой `x-proxy-router` и пунктом меню, библиотеки, которые нужны Electron (GTK, NSS,
-ALSA, Mesa и другие, `pacman.depends` в `electron-builder.yml`), pacman берёт из
+ALSA, Mesa и другие, `linux.pacman.depends` в `build.json`), pacman берёт из
 репозиториев. Пакет собирает fpm, которому нужны `bsdtar` и `zstd`. Для других
 дистрибутивов он не предназначен: распакованный как архив, он запускается, но без пункта
 меню, а там, где Chromium не может сделать песочницу (Ubuntu 24.04 и новее), только с
 `--no-sandbox`. Для них — AppImage.
 
-Обновление Python: новые версия, тег релиза и SHA-256 шести архивов
-`install_only_stripped` в `scripts/prepare-backend.py`. Версия приложения — `version`
-в `package.json`.
+Версия приложения, Python (версия, тег релиза и SHA-256 шести архивов
+`install_only_stripped`) и все остальные переменные сборки — в `build.json` в корне
+репозитория ([README](../README.md#переменные-сборки)).
