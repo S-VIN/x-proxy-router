@@ -176,6 +176,27 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
             error = await self.receive(ws)
             self.assertEqual((error["request_id"], error["error"]["code"]), (None, "bad_request"))
 
+    async def test_first_request_after_a_heartbeat(self):
+        # Browsers offer compression, and their first frame is often the pong to
+        # a heartbeat ping: the page sends nothing until the user acts.
+        self.enterContext(patch("server.main.WEBSOCKET_HEARTBEAT", 0.2))
+        async with self.session.ws_connect(self.url, compress=15) as ws:
+            await self.snapshots(ws)
+            # The client answers pings while it waits for a message.
+            received = asyncio.create_task(self.receive(ws))
+            await asyncio.sleep(0.5)
+            await ws.send_json(
+                {
+                    "type": "change",
+                    "model": "server_settings",
+                    "request_id": "r1",
+                    "payload": {"id": 0, "subscription_refresh_interval": 600},
+                }
+            )
+            update, response = await received, await self.receive(ws)
+            self.assertEqual(update["model"], "server_settings")
+            self.assertEqual((response["request_id"], response["ok"]), ("r1", True))
+
     async def test_changes_reach_other_clients(self):
         async with (
             self.session.ws_connect(self.url) as first,

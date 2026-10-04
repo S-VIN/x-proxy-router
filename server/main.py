@@ -499,8 +499,13 @@ class WebSocketServer:
         if not origin_allowed(origin, host):
             log.warning("Rejected WebSocket connection from origin %s", origin)
             return web.Response(status=403, text="Origin is not allowed")
+        # No compression: aiohttp 3.14.2+ closes the connection with a protocol
+        # error (1002) when the client's first data frame is compressed and a pong
+        # came before it, so a page idle for a heartbeat would lose its first request.
         socket = web.WebSocketResponse(
-            heartbeat=WEBSOCKET_HEARTBEAT, max_msg_size=WEBSOCKET_MAX_MESSAGE_SIZE
+            heartbeat=WEBSOCKET_HEARTBEAT,
+            max_msg_size=WEBSOCKET_MAX_MESSAGE_SIZE,
+            compress=False,
         )
         await socket.prepare(request)
         connection_id = uuid4().hex
