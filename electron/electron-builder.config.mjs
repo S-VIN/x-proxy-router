@@ -1,6 +1,7 @@
 // Packages of the desktop application; the "Desktop application" workflow runs
 // electron-builder on a computer of each OS and architecture (README.md). The names,
-// the version and the other variables come from build.json in the root.
+// the version and the choices about the packages of each platform come from build.json
+// in the root.
 import {
   appId,
   author,
@@ -13,6 +14,9 @@ import {
   repository,
   version,
 } from '../scripts/build-config.mjs';
+
+/** The Flatpak runtime and the Electron base application made for it, of one version. */
+const FLATPAK_VERSION = '25.08';
 
 /** Every package is named <name>-<version>-<system>-<arch>; ${…} are electron-builder's. */
 const artifactName = (system, ending = '.${ext}') =>
@@ -103,13 +107,24 @@ export default {
   },
 
   flatpak: {
-    // The runtime the Electron base application is made for, of one version.
     runtime: 'org.freedesktop.Platform',
-    runtimeVersion: build.linux.flatpak.version,
+    runtimeVersion: FLATPAK_VERSION,
     sdk: 'org.freedesktop.Sdk',
     base: 'org.electronjs.Electron2.BaseApp',
-    baseVersion: build.linux.flatpak.version,
-    finishArgs: build.linux.flatpak.permissions,
+    baseVersion: FLATPAK_VERSION,
+    finishArgs: [
+      // The window.
+      '--socket=wayland',
+      '--socket=fallback-x11',
+      '--share=ipc',
+      '--device=dri',
+      // The inbounds listen on the ports of the computer, the core connects to the servers.
+      '--share=network',
+      // The tray icon.
+      '--talk-name=org.kde.StatusNotifierWatcher',
+      // "Launch at login" writes a desktop entry there (src/autostart.ts).
+      '--filesystem=xdg-config/autostart:create',
+    ],
   },
 
   // The package of Arch Linux and the distributions based on it: pacman -U installs it in
@@ -123,6 +138,19 @@ export default {
     synopsis: description,
     // No updates: pacman updates the package; no file that describes it for them.
     publish: null,
-    depends: build.linux.pacman.depends,
+    // The packages of the libraries that Electron is linked with (those of electron-builder
+    // are of an older Electron and some are gone from Arch); the server's Python and the
+    // core bring their own.
+    depends: [
+      'gtk3',
+      'nss',
+      'alsa-lib',
+      'at-spi2-core',
+      'libcups',
+      'libxkbcommon',
+      'mesa',
+      // Links of the interface and "Show log" open through it.
+      'xdg-utils',
+    ],
   },
 };

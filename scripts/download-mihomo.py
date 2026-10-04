@@ -9,38 +9,57 @@ import zipfile
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-ROOT = Path(__file__).resolve().parents[1]
-# The variables of the builds (README.md): here the name, the version of Mihomo and the
-# digests of its archives, the ones GitHub publishes for the release.
-BUILD = json.loads((ROOT / "build.json").read_text(encoding="utf-8"))
-VERSION = BUILD["mihomo"]["version"]
-MIHOMO = ROOT / "resources" / "mihomo"
+VERSION = "1.19.31"
+ROOT = Path(__file__).resolve().parents[1] / "resources" / "mihomo"
 RELEASE = f"https://github.com/MetaCubeX/mihomo/releases/download/v{VERSION}"
-# (system as Node.js names it, arch): the system of build.json, the asset and its archive.
+# Archive digests published by GitHub for this release.
 ASSETS = {
-    ("linux", "x64"): ("linux", "linux-amd64-compatible", "gz"),
-    ("linux", "arm64"): ("linux", "linux-arm64", "gz"),
-    ("win32", "x64"): ("windows", "windows-amd64-compatible", "zip"),
-    ("win32", "arm64"): ("windows", "windows-arm64", "zip"),
-    ("darwin", "x64"): ("macos", "darwin-amd64-compatible", "gz"),
-    ("darwin", "arm64"): ("macos", "darwin-arm64", "gz"),
+    ("linux", "x64"): (
+        "linux-amd64-compatible",
+        "gz",
+        "04cf9f09671704f839ddbee2e93069dc831a4123a75281e725d1d96ab9ac1afc",
+    ),
+    ("linux", "arm64"): (
+        "linux-arm64",
+        "gz",
+        "9e0f11afbf38426b8bd88fdc594678f8161c57eccb4e1b77acb12b493904f1d4",
+    ),
+    ("win32", "x64"): (
+        "windows-amd64-compatible",
+        "zip",
+        "93d14e9a13b49b2f2d256202d02cc8d14a7c4695edf084cae0f941986bc9c218",
+    ),
+    ("win32", "arm64"): (
+        "windows-arm64",
+        "zip",
+        "68659624a38ae1dbc4e1b92f45d4dc75da0eaedd4d732b0a6f01a308da945792",
+    ),
+    ("darwin", "x64"): (
+        "darwin-amd64-compatible",
+        "gz",
+        "fb6fca0e105b4310a21eaacd3a8d3853d3d8b87fa4c69737bea52a30a435aac7",
+    ),
+    ("darwin", "arm64"): (
+        "darwin-arm64",
+        "gz",
+        "d131f44b3deb2a8356f7ac75048ad67a10d53243323951c4f3cda7b672922963",
+    ),
 }
 
 
 def download(url):
-    with urlopen(Request(url, headers={"User-Agent": BUILD["name"]}), timeout=120) as response:
+    with urlopen(Request(url, headers={"User-Agent": "x-proxy-router"}), timeout=120) as response:
         return response.read()
 
 
 def main():
-    MIHOMO.mkdir(parents=True, exist_ok=True)
+    ROOT.mkdir(parents=True, exist_ok=True)
     manifest = {
         "version": VERSION,
         "repository": "https://github.com/MetaCubeX/mihomo",
         "binaries": [],
     }
-    for (system, arch), (name, platform, extension) in ASSETS.items():
-        digest = BUILD["mihomo"]["sha256"][f"{name}-{arch}"]
+    for (system, arch), (platform, extension, digest) in ASSETS.items():
         asset = f"mihomo-{platform}-v{VERSION}.{extension}"
         url = f"{RELEASE}/{asset}"
         print(f"Downloading {asset}", flush=True)
@@ -55,7 +74,7 @@ def main():
                 if len(executables) != 1:
                     raise RuntimeError(f"Unexpected archive contents: {asset}")
                 binary = zipped.read(executables[0])
-        directory = MIHOMO / system / arch
+        directory = ROOT / system / arch
         directory.mkdir(parents=True, exist_ok=True)
         target = directory / ("mihomo.exe" if system == "win32" else "mihomo")
         temporary = target.with_suffix(".download")
@@ -66,7 +85,7 @@ def main():
         record = {
             "os": system,
             "architecture": arch,
-            "path": str(target.relative_to(MIHOMO)),
+            "path": str(target.relative_to(ROOT)),
             "url": url,
             "archive_sha256": digest,
             "sha256": hashlib.sha256(binary).hexdigest(),
@@ -75,11 +94,11 @@ def main():
             json.dumps(record, indent=2) + "\n", encoding="utf-8"
         )
         manifest["binaries"].append(record)
-    (MIHOMO / "LICENSE").write_bytes(
+    (ROOT / "LICENSE").write_bytes(
         download(f"https://raw.githubusercontent.com/MetaCubeX/mihomo/v{VERSION}/LICENSE")
     )
-    (MIHOMO / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    print(f"Installed Mihomo {VERSION} in {MIHOMO}")
+    (ROOT / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    print(f"Installed Mihomo {VERSION} in {ROOT}")
 
 
 if __name__ == "__main__":

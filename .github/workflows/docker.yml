@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The versions and the platforms of build.json (scripts/build-config.mjs).
+      # The architectures of build.json (scripts/build-config.mjs).
       - id: build
         run: node scripts/build-config.mjs github >> "$GITHUB_OUTPUT"
 
@@ -45,7 +45,6 @@ jobs:
           context: .
           file: docker/Dockerfile
           platforms: ${{ steps.build.outputs.docker_platforms }}
-          build-args: ${{ steps.build.outputs.docker_args }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

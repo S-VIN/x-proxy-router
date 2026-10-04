@@ -136,8 +136,9 @@ Electron — в `~/.config/x-proxy-router-dev`. Другую папку данн
 Пакеты собирает workflow «Desktop application» в GitHub Actions
 (`.github/workflows/desktop.yml`), только вручную: Actions → Desktop application →
 Run workflow. Шесть заданий — Windows, Linux и macOS, x64 и arm64 — идут на машинах
-своей ОС и архитектуры; задания и их раннеры workflow берёт из `build.json`. Готовые файлы — артефакты запуска `x-proxy-router-<os>-<arch>`:
-два файла для Windows, три для Linux, один образ для macOS.
+своей ОС и архитектуры; задания и их раннеры workflow берёт из `build.json`. Готовые
+файлы — артефакты запуска `x-proxy-router-<os>-<arch>`: два файла для Windows, три для
+Linux, один образ для macOS.
 
 Шаги задания:
 
@@ -148,7 +149,7 @@ Run workflow. Шесть заданий — Windows, Linux и macOS, x64 и arm6
    `python/` (переносимый CPython из
    [python-build-standalone](https://github.com/astral-sh/python-build-standalone) с
    пакетами из `uv.lock`), `server/`, `web/dist/` и один бинарник Mihomo. Версия Python
-   и SHA-256 архивов закреплены в `build.json`; пакеты ставятся готовыми wheels целевой
+   и SHA-256 архивов закреплены в скрипте; пакеты ставятся готовыми wheels целевой
    платформы с проверкой хешей. Лишнее (Tk, тесты, pip) удаляется, модули
    компилируются в `.pyc`: установленное приложение доступно только на чтение.
 4. `npm run dist -- --<arch>` — electron-builder кладёт эту папку в ресурсы как `backend`
@@ -193,12 +194,13 @@ Flatpak — одиночный файл: `flatpak install --user x-proxy-router-
 Пакет Arch Linux — для Arch и дистрибутивов на его основе (Manjaro, EndeavourOS, CachyOS):
 `sudo pacman -U x-proxy-router-*.pkg.tar.zst`. Приложение ставится в `/opt/X Proxy Router`
 с командой `x-proxy-router` и пунктом меню, библиотеки, которые нужны Electron (GTK, NSS,
-ALSA, Mesa и другие, `linux.pacman.depends` в `build.json`), pacman берёт из
+ALSA, Mesa и другие, `pacman.depends` в `electron-builder.config.mjs`), pacman берёт из
 репозиториев. Пакет собирает fpm, которому нужны `bsdtar` и `zstd`. Для других
 дистрибутивов он не предназначен: распакованный как архив, он запускается, но без пункта
 меню, а там, где Chromium не может сделать песочницу (Ubuntu 24.04 и новее), только с
 `--no-sandbox`. Для них — AppImage.
 
-Версия приложения, Python (версия, тег релиза и SHA-256 шести архивов
-`install_only_stripped`) и все остальные переменные сборки — в `build.json` в корне
-репозитория ([README](../README.md#переменные-сборки)).
+Обновление Python: новые версия, тег релиза и SHA-256 шести архивов
+`install_only_stripped` в `scripts/prepare-backend.py`. Версия приложения и остальные
+переменные пакетов — в `build.json` в корне репозитория
+([README](../README.md#переменные-сборки)).

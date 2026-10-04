@@ -6,31 +6,6 @@
   "author": "S-VIN",
   "license": "MIT",
   "repository": "https://github.com/S-VIN/x-proxy-router",
-  "node": "24",
-  "uv": "0.12",
-  "python": {
-    "version": "3.12.15",
-    "release": "20261001",
-    "sha256": {
-      "linux-x64": "7bb1659e3235077b7f63d5b6eb6ce653c6fcd6c5041e9d5f73b42ce10421464d",
-      "linux-arm64": "0b35f4dc08d58534eb82e024989e2db9873885dccd4f2a316ff55c0cec146123",
-      "windows-x64": "52124cee54126f3f360eaa378288f6f64c402c983a3c14c95eff67f4af986aaa",
-      "windows-arm64": "2b7d0422475973a90fb0817e9062a00ee745c46a3376c46e7a397ab0e345881e",
-      "macos-x64": "d101ac54bc34afff54741406261325dc896b7b646a36a58fff4845ef0a00b2ce",
-      "macos-arm64": "10cab8f6ed6202fdd81637aa6eda4af8d5b7eaa8fc42f9df3c6bea4923de0d93"
-    }
-  },
-  "mihomo": {
-    "version": "1.19.31",
-    "sha256": {
-      "linux-x64": "04cf9f09671704f839ddbee2e93069dc831a4123a75281e725d1d96ab9ac1afc",
-      "linux-arm64": "9e0f11afbf38426b8bd88fdc594678f8161c57eccb4e1b77acb12b493904f1d4",
-      "windows-x64": "93d14e9a13b49b2f2d256202d02cc8d14a7c4695edf084cae0f941986bc9c218",
-      "windows-arm64": "68659624a38ae1dbc4e1b92f45d4dc75da0eaedd4d732b0a6f01a308da945792",
-      "macos-x64": "fb6fca0e105b4310a21eaacd3a8d3853d3d8b87fa4c69737bea52a30a435aac7",
-      "macos-arm64": "d131f44b3deb2a8356f7ac75048ad67a10d53243323951c4f3cda7b672922963"
-    }
-  },
   "windows": {
     "runners": { "x64": "windows-latest", "arm64": "windows-11-arm" },
     "oneClick": true,
@@ -44,30 +19,6 @@
   },
   "linux": {
     "runners": { "x64": "ubuntu-24.04", "arm64": "ubuntu-24.04-arm" },
-    "category": "Network",
-    "flatpak": {
-      "version": "25.08",
-      "permissions": [
-        "--socket=wayland",
-        "--socket=fallback-x11",
-        "--share=ipc",
-        "--device=dri",
-        "--share=network",
-        "--talk-name=org.kde.StatusNotifierWatcher",
-        "--filesystem=xdg-config/autostart:create"
-      ]
-    },
-    "pacman": {
-      "depends": [
-        "gtk3",
-        "nss",
-        "alsa-lib",
-        "at-spi2-core",
-        "libcups",
-        "libxkbcommon",
-        "mesa",
-        "xdg-utils"
-      ]
-    }
+    "category": "Network"
   }
 }

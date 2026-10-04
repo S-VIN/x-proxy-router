@@ -1,8 +1,8 @@
-// Every variable of the builds is in build.json (README.md). This module adds the values
-// made of them and gives both to the electron-builder configuration and to the main
-// process of the desktop application. Run as a script, it prints them for the workflows
-// and for docker build (the end of the file). The Python scripts read build.json
-// themselves.
+// The variables of the packages of every platform are in build.json (README.md); the
+// versions of what the builds use stay with the code that uses it. This module adds the
+// values made of the variables and gives both to the electron-builder configuration and
+// to the main process of the desktop application. Run as a script, it prints them for
+// the workflows: node scripts/build-config.mjs github >> "$GITHUB_OUTPUT".
 import build from '../build.json' with { type: 'json' };
 
 export { build };
@@ -50,33 +50,13 @@ export function dockerPlatforms() {
   return Object.keys(build.linux.runners).map((arch) => `linux/${arch === 'x64' ? 'amd64' : arch}`);
 }
 
-/** The build arguments of docker/Dockerfile. */
-export function dockerArgs() {
-  return {
-    NODE_VERSION: build.node,
-    // The images of Python are named by the minor version.
-    PYTHON_VERSION: build.python.version.split('.').slice(0, 2).join('.'),
-    UV_VERSION: build.uv,
-  };
-}
-
-const command = /build-config\.mjs$/.test(process.argv[1] ?? '') ? process.argv[2] : null;
-if (command === 'docker') {
-  // docker build $(node scripts/build-config.mjs docker) -f docker/Dockerfile .
-  const args = Object.entries(dockerArgs()).map(([key, value]) => `--build-arg ${key}=${value}`);
-  console.log(args.join(' '));
-} else if (command === 'github') {
-  // node scripts/build-config.mjs github >> "$GITHUB_OUTPUT"
+if (/build-config\.mjs$/.test(process.argv[1] ?? '') && process.argv[2] === 'github') {
   const outputs = {
     name,
     product_name: productName,
     app_id: appId,
-    node: build.node,
-    uv: build.uv,
     jobs: JSON.stringify(desktopJobs()),
     docker_platforms: dockerPlatforms().join(','),
   };
   for (const [key, value] of Object.entries(outputs)) console.log(`${key}=${value}`);
-  const args = Object.entries(dockerArgs()).map(([key, value]) => `${key}=${value}`);
-  console.log(`docker_args<<END\n${args.join('\n')}\nEND`);
 }

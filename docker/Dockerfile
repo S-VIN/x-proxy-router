@@ -1,15 +1,9 @@
-# check=skip=InvalidDefaultArgInFrom
-# Built from the root of the repository with the versions of build.json (docker/README.md):
-#   docker build $(node scripts/build-config.mjs docker) -f docker/Dockerfile .
+# Built from the root of the repository: docker build -f docker/Dockerfile .
 # Platforms: linux/amd64 and linux/arm64, the Linux builds of Mihomo in resources/mihomo.
-# The versions have no defaults (the check above): they are only those of build.json.
-ARG NODE_VERSION
-ARG PYTHON_VERSION
-ARG UV_VERSION
 
 # The web client and the choice of Mihomo do not depend on the target platform,
 # so they run natively on the build machine.
-FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS web
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
@@ -30,18 +24,15 @@ RUN case "$TARGETARCH" in \
     && mv "/mihomo/linux/$arch" /out/linux/ \
     && chmod 755 "/out/linux/$arch/mihomo"
 
-# COPY --from takes no build arguments: the image of uv is a stage of its own.
-FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
-
 # Python dependencies exactly as in uv.lock, without the development tools.
-FROM python:${PYTHON_VERSION}-slim AS python
-COPY --from=uv /uv /bin/uv
+FROM python:3.11-slim AS python
+COPY --from=ghcr.io/astral-sh/uv:0.12 /uv /bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
 
-FROM python:${PYTHON_VERSION}-slim
+FROM python:3.11-slim
 WORKDIR /app
 # The same layout as in the repository: the server finds Mihomo and the web client by it.
 COPY --from=python /app/.venv .venv/

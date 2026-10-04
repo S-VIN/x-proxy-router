@@ -10,15 +10,13 @@ permissions:
   contents: read
 
 jobs:
-  # The variables of build.json for the jobs below (scripts/build-config.mjs).
+  # The names and the platforms of build.json for the jobs below (scripts/build-config.mjs).
   config:
     runs-on: ubuntu-latest
     outputs:
       name: ${{ steps.config.outputs.name }}
       product_name: ${{ steps.config.outputs.product_name }}
       app_id: ${{ steps.config.outputs.app_id }}
-      node: ${{ steps.config.outputs.node }}
-      uv: ${{ steps.config.outputs.uv }}
       jobs: ${{ steps.config.outputs.jobs }}
     steps:
       # build.json is in the root, which a sparse checkout always has.
@@ -47,7 +45,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: ${{ needs.config.outputs.node }}
+          node-version: 24
           cache: npm
           cache-dependency-path: |
             web/package-lock.json
@@ -55,8 +53,6 @@ jobs:
 
       # setup-uv has no moving major tag: only full versions exist.
       - uses: astral-sh/setup-uv@v10.2.0
-        with:
-          version: ${{ needs.config.outputs.uv }}
 
       # Flatpak for the package, bsdtar and zstd that fpm makes the pacman package with,
       # the libraries Electron needs and a display for the checks.
