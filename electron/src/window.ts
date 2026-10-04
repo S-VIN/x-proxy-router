@@ -161,6 +161,8 @@ export class MainWindow {
 
 function interfaceSession(): Electron.Session {
   const memory = session.fromPartition(PARTITION);
+  // Nothing to check in the interface: no dictionary downloaded and kept in memory.
+  memory.setSpellCheckerEnabled(false);
   // The interface asks for nothing: no camera, location or notifications.
   memory.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
   return memory;

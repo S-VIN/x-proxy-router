@@ -10,6 +10,7 @@ Electron-обвязка: одно приложение для Windows, Linux и 
 | Портативный Windows | `x-proxy-router-<версия>-windows-<arch>-portable.exe` | папка `data` рядом с exe                                          |
 | AppImage            | `x-proxy-router-<версия>-linux-<arch>.AppImage`       | `~/.config/x-proxy-router`                                        |
 | Flatpak             | `x-proxy-router-<версия>-linux-<arch>.flatpak`        | `~/.var/app/io.github.s_vin.x_proxy_router/config/x-proxy-router` |
+| Пакет Arch Linux    | `x-proxy-router-<версия>-linux-<arch>.pkg.tar.zst`    | `~/.config/x-proxy-router`                                        |
 | Образ macOS         | `x-proxy-router-<версия>-macos-<arch>.dmg`            | `~/Library/Application Support/x-proxy-router`                    |
 
 Каждый вариант собирается под x64 и arm64 (у Mac это Intel и Apple silicon). В папке
@@ -59,9 +60,42 @@ Electron-обвязка: одно приложение для Windows, Linux и 
 автозапуска, если её включали, снимается флажком в трее. Flatpak:
 `flatpak uninstall --delete-data io.github.s_vin.x_proxy_router`. AppImage — удалить
 файл, `~/.config/x-proxy-router` и, если включали автозапуск,
-`~/.config/autostart/x-proxy-router.desktop`. macOS: у образа нет деинсталлятора —
+`~/.config/autostart/x-proxy-router.desktop`. Пакет Arch Linux удаляет
+`sudo pacman -R x-proxy-router`, папку данных и файл автозапуска — вручную, как у
+AppImage. macOS: у образа нет деинсталлятора —
 приложение переносят в корзину, а `~/Library/Application Support/x-proxy-router` и
 файл автозапуска из `~/Library/LaunchAgents` удаляют вручную.
+
+## Память
+
+Больше всего памяти занимают процессы Chromium, а не интерфейс. Поэтому:
+
+- **Без GPU.** Страница рисуется процессором (`app.disableHardwareAcceleration()` в
+  `src/main.ts`): интерфейс выглядит так же, а GPU-процесс не загружает графический
+  драйвер, который и занимал почти всю его память.
+- **Сеть в main-процессе.** Сетевой сервис Chromium, который здесь только загружает
+  страницу с локального сервера, работает в main-процессе (`NetworkServiceInProcess2`), а
+  не в отдельном.
+- **Без проверки орфографии.** Сессия окна не скачивает словарь и не держит его в памяти
+  (`src/window.ts`).
+- **Длинный список серверов.** Строки далеко от видимой части не раскладываются и не
+  рисуются (`content-visibility` в `web/src/components/blocks/servers/ServerRow.svelte`).
+- **Закрытое окно** уничтожается вместе со своим процессом: в трее работают только main-
+  и GPU-процессы, сервер и ядро.
+
+Замер на Linux x64 с подпиской на 400 серверов, медиана трёх запусков; PSS — доля
+процесса в общей памяти, USS — только его собственная, в МБ:
+
+| Состояние     | Electron до → после          | Вместе с сервером и ядром |
+| ------------- | ---------------------------- | ------------------------- |
+| Окно открыто  | PSS 390 → 283, USS 260 → 156 | PSS 477 → 369             |
+| Только в трее | PSS 251 → 169, USS 168 → 92  | PSS 338 → 256             |
+
+Сервер на Python (около 40 МБ) и Mihomo (около 45 МБ, из них своей памяти около 11 МБ)
+этими мерами не меняются. Меньше примерно 200 МБ PSS с открытым окном Electron не
+занимает даже с пустой страницей. В Windows диспетчер задач показывает приложение одной
+группой вместе с `python.exe` и `mihomo.exe`, по процессу на строку; в Linux PSS
+процессов считает, например, `smem -P x-proxy-router`.
 
 ## Разработка
 
@@ -82,28 +116,29 @@ npm run format:check  # стиль (Prettier); npm run format — исправи
 Electron — в `~/.config/x-proxy-router-dev`. Другую папку данных задаёт
 `XPR_DESKTOP_DATA_DIR`. F12 открывает DevTools, F5 перезагружает страницу.
 
-| Файл                                    | Ответственность                                                            |
-| --------------------------------------- | -------------------------------------------------------------------------- |
-| `src/main.ts`                           | Жизненный цикл: запуск сервера, окно, трей, выход, проверка `--smoke-test` |
-| `src/paths.ts`                          | Папка данных и расположение сервера и Python: в репозитории и в пакете     |
-| `src/backend.ts`                        | Процесс сервера: свободный порт, ожидание готовности, остановка            |
-| `src/logFile.ts`                        | Лог сервера с ограничением размера и последними строками для окна ошибки   |
-| `src/window.ts`                         | Окно интерфейса                                                            |
-| `src/tray.ts`                           | Иконка и меню трея, проверка, что трей есть                                |
-| `src/linkWatcher.ts`                    | Состояние подключения по WebSocket для иконки трея                         |
-| `src/autostart.ts`                      | Запуск при входе в систему                                                 |
-| `scripts/make-icons.mjs`                | Иконки приложения и трея из логотипа `web/src/lib/logo.ts`                 |
-| `scripts/build.mjs`                     | Сборка main-процесса в `dist/main.cjs` (esbuild)                           |
-| `scripts/prepare-backend.py`            | Сервер с Python и ядром для упаковки                                       |
-| `electron-builder.yml`, `installer.nsh` | Упаковка                                                                   |
+| Файл                                           | Ответственность                                                            |
+| ---------------------------------------------- | -------------------------------------------------------------------------- |
+| `src/main.ts`                                  | Жизненный цикл: запуск сервера, окно, трей, выход, проверка `--smoke-test` |
+| `src/paths.ts`                                 | Папка данных и расположение сервера и Python: в репозитории и в пакете     |
+| `src/backend.ts`                               | Процесс сервера: свободный порт, ожидание готовности, остановка            |
+| `src/logFile.ts`                               | Лог сервера с ограничением размера и последними строками для окна ошибки   |
+| `src/window.ts`                                | Окно интерфейса                                                            |
+| `src/tray.ts`                                  | Иконка и меню трея, проверка, что трей есть                                |
+| `src/linkWatcher.ts`                           | Состояние подключения по WebSocket для иконки трея                         |
+| `src/autostart.ts`                             | Запуск при входе в систему                                                 |
+| `scripts/make-icons.mjs`                       | Иконки приложения и трея из логотипа `web/src/lib/logo.ts`                 |
+| `scripts/build.mjs`                            | Сборка main-процесса в `dist/main.cjs` (esbuild)                           |
+| `scripts/prepare-backend.py`                   | Сервер с Python и ядром для упаковки                                       |
+| `electron-builder.config.mjs`, `installer.nsh` | Упаковка; имена, версия и остальные переменные — из `build.json` в корне   |
 
 ## Сборка пакетов
 
 Пакеты собирает workflow «Desktop application» в GitHub Actions
 (`.github/workflows/desktop.yml`), только вручную: Actions → Desktop application →
 Run workflow. Шесть заданий — Windows, Linux и macOS, x64 и arm64 — идут на машинах
-своей ОС и архитектуры. Готовые файлы — артефакты запуска `x-proxy-router-<os>-<arch>`:
-по два файла для Windows и Linux, один образ для macOS.
+своей ОС и архитектуры; задания и их раннеры workflow берёт из `build.json`. Готовые
+файлы — артефакты запуска `x-proxy-router-<os>-<arch>`: два файла для Windows, три для
+Linux, один образ для macOS.
 
 Шаги задания:
 
@@ -121,7 +156,8 @@ Run workflow. Шесть заданий — Windows, Linux и macOS, x64 и arm6
    и собирает пакеты в `release/`.
 5. Проверка: собранное приложение запускается с `--smoke-test` — поднимает сервер с
    ядром, загружает страницу, подключается по WebSocket и выходит с кодом 0. В Linux так
-   же проверяются AppImage и установленный Flatpak, в macOS — приложение из
+   же проверяются AppImage, установленный Flatpak и, на x64, пакет pacman, установленный
+   в контейнере Arch Linux со своими зависимостями из репозиториев; в macOS — приложение из
    смонтированного образа.
 6. Только в macOS: тесты сервера (`server/tests`) — другого места прогнать их на этой
    ОС нет.
@@ -132,8 +168,8 @@ Run workflow. Шесть заданий — Windows, Linux и macOS, x64 и arm6
 
 ### macOS
 
-Сертификата Apple нет, поэтому у приложения подпись ad-hoc (`mac.identity: '-'` в
-`electron-builder.yml`): без неё Mac с Apple silicon не запускает код вообще. Подписываются
+Сертификата Apple нет, поэтому у приложения подпись ad-hoc (`macos.identity: "-"` в
+`build.json`): без неё Mac с Apple silicon не запускает код вообще. Подписываются
 и исполняемые файлы сервера — Python, его модули-расширения и ядро; остальные файлы
 сервера входят в подпись приложения как обычные ресурсы (`mac.signIgnore`).
 
@@ -148,12 +184,23 @@ xattr -dr com.apple.quarantine "/Applications/X Proxy Router.app"
 
 Чтобы предупреждения не было, нужны подпись Developer ID и нотаризация (платная
 программа Apple Developer): сертификат и ключ нотаризации передаются electron-builder
-переменными окружения, в `electron-builder.yml` убираются `identity` и `hardenedRuntime`.
+переменными окружения, а `macos.identity` в `build.json` становится именем сертификата или
+`null`; hardened runtime тогда включается сам.
 
 Flatpak — одиночный файл: `flatpak install --user x-proxy-router-*.flatpak`; среда
 `org.freedesktop.Platform` ставится с Flathub. Пакету разрешены сеть (inbound слушают
 порты компьютера), трей и папка `~/.config/autostart`.
 
+Пакет Arch Linux — для Arch и дистрибутивов на его основе (Manjaro, EndeavourOS, CachyOS):
+`sudo pacman -U x-proxy-router-*.pkg.tar.zst`. Приложение ставится в `/opt/X Proxy Router`
+с командой `x-proxy-router` и пунктом меню, библиотеки, которые нужны Electron (GTK, NSS,
+ALSA, Mesa и другие, `pacman.depends` в `electron-builder.config.mjs`), pacman берёт из
+репозиториев. Пакет собирает fpm, которому нужны `bsdtar` и `zstd`. Для других
+дистрибутивов он не предназначен: распакованный как архив, он запускается, но без пункта
+меню, а там, где Chromium не может сделать песочницу (Ubuntu 24.04 и новее), только с
+`--no-sandbox`. Для них — AppImage.
+
 Обновление Python: новые версия, тег релиза и SHA-256 шести архивов
-`install_only_stripped` в `scripts/prepare-backend.py`. Версия приложения — `version`
-в `package.json`.
+`install_only_stripped` в `scripts/prepare-backend.py`. Версия приложения и остальные
+переменные пакетов — в `build.json` в корне репозитория
+([README](../README.md#переменные-сборки)).

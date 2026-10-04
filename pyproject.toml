@@ -1,6 +1,8 @@
 [project]
 name = "x-proxy-router"
-version = "0.1.0"
+# Required by uv; this project is never built. The version of the application is in
+# build.json.
+version = "0.0.0"
 requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.14,<4",

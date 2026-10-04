@@ -110,6 +110,45 @@ SOCKS5/HTTP-прокси `127.0.0.1:20808`) и регистрируются со
 [`server/README.md`](server/README.md).
 Протокол между клиентами и сервером: [`server/PROTOCOL.md`](server/PROTOCOL.md).
 
+## Переменные сборки
+
+Переменные пакетов всех платформ — что это за приложение, его версия, под какие
+системы и архитектуры оно собирается и как выглядят пакеты каждой системы — записаны в
+одном файле [`build.json`](build.json). Его читает `scripts/build-config.mjs`: он
+вычисляет из переменных остальные значения и отдаёт их конфигурации electron-builder
+(`electron/electron-builder.config.mjs`), main-процессу приложения и workflow
+(`node scripts/build-config.mjs github`).
+
+| Переменная | Сейчас | На что влияет |
+| --- | --- | --- |
+| `name` | `x-proxy-router` | имена файлов пакетов и артефактов CI, команда и пакет pacman в Linux, папка данных (`%APPDATA%\x-proxy-router`, `~/.config/x-proxy-router`) |
+| `productName` | `X Proxy Router` | имя в меню, окнах и трее, `X Proxy Router.exe` и `.app`, папка `/opt/X Proxy Router` |
+| `version` | `0.1.0` | версия всех пакетов и их имён |
+| `description` | одна строка | описание приложения в пакетах и в пункте меню Linux |
+| `author` | `S-VIN` | автор и издатель, `Copyright © <год сборки> <author>`, packager пакета pacman |
+| `license` | `MIT` | лицензия в пакетах |
+| `repository` | `https://github.com/S-VIN/x-proxy-router` | домашняя страница пакетов и id приложения `io.github.<владелец>.<репозиторий>` (`io.github.s_vin.x_proxy_router`): id Flatpak, bundle macOS, AppUserModelID Windows, записи автозапуска |
+| `windows.runners`, `macos.runners`, `linux.runners` | метка раннера GitHub на архитектуру | под какие архитектуры собирается каждая система — по заданию workflow «Desktop application» на каждую; образ Docker собирается под архитектуры Linux |
+| `windows.oneClick`, `.perMachine`, `.deleteAppDataOnUninstall` | `true`, `false`, `true` | инсталлер: без вопросов, для текущего пользователя без прав администратора, удаление стирает настройки и автозапуск |
+| `macos.category` | `public.app-category.utilities` | категория приложения |
+| `macos.identity` | `-` | подпись: `-` — ad-hoc; имя сертификата Developer ID или `null` (найти самому) — настоящая, тогда включается hardened runtime |
+| `linux.category` | `Network` | раздел меню |
+
+Смена `name` или `repository` после выпуска переносит папку данных и id приложения: у
+пользователей пропадут настройки и останутся старые записи автозапуска.
+
+Зависимости и их версии в `build.json` не входят, они лежат рядом с тем, что их
+использует:
+
+| Что | Где |
+| --- | --- |
+| Electron, electron-builder и другие пакеты npm | `electron/package.json`, `web/package.json` и их `package-lock.json` |
+| Пакеты Python сервера | `pyproject.toml` и `uv.lock`, `server/requirements.txt` |
+| Python внутри десктопных пакетов | `electron/scripts/prepare-backend.py` |
+| Mihomo | `scripts/download-mihomo.py` |
+| Среда Flatpak, его права и библиотеки пакета pacman | `electron/electron-builder.config.mjs` |
+| Node.js, uv и образы Docker | `.github/workflows/*.yml`, `docker/Dockerfile` |
+
 ## Docker
 
 Для сервера приложение запускается в Docker: образ собирает workflow «Docker image» в
@@ -121,8 +160,8 @@ GitHub Actions (только вручную) и публикует в `ghcr.io/s
 
 Папка [`electron`](electron) — приложение для Windows, Linux и macOS (x64 и arm64):
 запускает сервер с ядром и показывает веб-интерфейс в своём окне, при закрытии окна
-остаётся в трее. Варианты: инсталлер и портативный exe для Windows, AppImage и Flatpak
-для Linux, образ DMG для macOS.
+остаётся в трее. Варианты: инсталлер и портативный exe для Windows, AppImage, Flatpak и
+пакет pacman для Linux, образ DMG для macOS.
 Их собирает workflow «Desktop application» в GitHub Actions (только вручную), файлы —
 в артефактах запуска. Запуск для разработки:
 

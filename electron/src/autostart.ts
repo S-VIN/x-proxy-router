@@ -2,17 +2,19 @@ import { app } from 'electron';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { appId, name, productName } from '../../scripts/build-config.mjs';
 
 /** Started at login: no window, only the tray icon. */
 export const HIDDEN_FLAG = '--hidden';
 
-export const APP_NAME = 'X Proxy Router';
+export const APP_NAME = productName;
 /**
  * The Flatpak application id, the Windows AppUserModelID, the label of the macOS
  * launch agent and the name of the icon.
  */
-export const APP_ID = 'io.github.s_vin.x_proxy_router';
-const DESKTOP_FILE = 'x-proxy-router.desktop';
+export const APP_ID = appId;
+/** Also the name of the command and of the icon of the Linux packages. */
+const DESKTOP_FILE = `${name}.desktop`;
 
 export interface Autostart {
   isEnabled(): boolean;
@@ -48,7 +50,7 @@ export function desktopEntry(command: string[], flatpakId?: string): string {
     `Name=${APP_NAME}`,
     'Comment=Start in the tray at login',
     `Exec=${command.map(quoteExec).join(' ')}`,
-    `Icon=${flatpakId ?? 'x-proxy-router'}`,
+    `Icon=${flatpakId ?? name}`,
     'Terminal=false',
     'X-GNOME-Autostart-enabled=true',
   ];

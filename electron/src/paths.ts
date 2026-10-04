@@ -1,9 +1,13 @@
 import { app, dialog } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { name, productName } from '../../scripts/build-config.mjs';
 
-/** Folder name in the user's application data; the uninstaller removes it by this name. */
-const DATA_FOLDER = 'x-proxy-router';
+/**
+ * Folder name in the user's application data: the name of the package, by which the
+ * Windows uninstaller removes it.
+ */
+const DATA_FOLDER = name;
 
 export interface Paths {
   /** settings.sqlite3 of the server, the logs and the window state. */
@@ -56,7 +60,7 @@ export function setupPaths(): Paths {
   } catch (error) {
     // E.g. the portable exe on a read-only disk: nowhere to keep the settings.
     const reason = error instanceof Error ? error.message : String(error);
-    dialog.showErrorBox(app.name, `Cannot create the data folder ${data}.\n${reason}`);
+    dialog.showErrorBox(productName, `Cannot create the data folder ${data}.\n${reason}`);
     process.exit(1);
   }
   app.setPath('userData', electron);

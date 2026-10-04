@@ -5,6 +5,9 @@
     "module": "preserve",
     "moduleResolution": "bundler",
     "types": ["node"],
+    // build.json and the module that reads it (scripts/build-config.mjs).
+    "allowJs": true,
+    "resolveJsonModule": true,
     "strict": true,
     "noEmit": true,
     "isolatedModules": true,

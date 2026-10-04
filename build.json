@@ -1,0 +1,24 @@
+{
+  "name": "x-proxy-router",
+  "productName": "X Proxy Router",
+  "version": "0.1.0",
+  "description": "Runs and configures the Mihomo core: the server and its web interface in one window",
+  "author": "S-VIN",
+  "license": "MIT",
+  "repository": "https://github.com/S-VIN/x-proxy-router",
+  "windows": {
+    "runners": { "x64": "windows-latest", "arm64": "windows-11-arm" },
+    "oneClick": true,
+    "perMachine": false,
+    "deleteAppDataOnUninstall": true
+  },
+  "macos": {
+    "runners": { "x64": "macos-26-intel", "arm64": "macos-26" },
+    "category": "public.app-category.utilities",
+    "identity": "-"
+  },
+  "linux": {
+    "runners": { "x64": "ubuntu-24.04", "arm64": "ubuntu-24.04-arm" },
+    "category": "Network"
+  }
+}
