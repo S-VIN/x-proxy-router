@@ -16,7 +16,7 @@ import {
 } from '../scripts/build-config.mjs';
 
 /** The Flatpak runtime and the Electron base application made for it, of one version. */
-const FLATPAK_VERSION = '25.08';
+const FLATPAK_VERSION = '26.08';
 
 /** Every package is named <name>-<version>-<system>-<arch>; ${…} are electron-builder's. */
 const artifactName = (system, ending = '.${ext}') =>
