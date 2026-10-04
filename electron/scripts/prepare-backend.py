@@ -29,34 +29,36 @@ CACHE = ELECTRON / "build" / "cache"
 
 # https://github.com/astral-sh/python-build-standalone: CPython that runs from any
 # folder. The digests are the ones GitHub publishes for the release.
-PYTHON_VERSION = "3.12.15"
-PYTHON_RELEASE = "20261001"
+PYTHON_VERSION = "3.14.8"
+PYTHON_RELEASE = "20261003"
+# Folder of the standard library on Linux and macOS.
+PYTHON_LIBRARY = "lib/python" + ".".join(PYTHON_VERSION.split(".")[:2])
 PYTHON_URL = "https://github.com/astral-sh/python-build-standalone/releases/download"
 # (os, arch) as electron-builder names them: the build's triple and its archive digest.
 PYTHONS = {
     ("linux", "x64"): (
         "x86_64-unknown-linux-gnu",
-        "7bb1659e3235077b7f63d5b6eb6ce653c6fcd6c5041e9d5f73b42ce10421464d",
+        "d9ec7a6935ade8b671a57ebaf111083d7314eab8dae5071d167054dadd2b97d6",
     ),
     ("linux", "arm64"): (
         "aarch64-unknown-linux-gnu",
-        "0b35f4dc08d58534eb82e024989e2db9873885dccd4f2a316ff55c0cec146123",
+        "ece2bf3d4b47c80c2403c5f32fa51a9458abaee93c10def8acafb5f45163e77d",
     ),
     ("win", "x64"): (
         "x86_64-pc-windows-msvc",
-        "52124cee54126f3f360eaa378288f6f64c402c983a3c14c95eff67f4af986aaa",
+        "10e5705e44938ee78de35c62b30fdfe2945b53438343d04c0f53548cdd8e91b6",
     ),
     ("win", "arm64"): (
         "aarch64-pc-windows-msvc",
-        "2b7d0422475973a90fb0817e9062a00ee745c46a3376c46e7a397ab0e345881e",
+        "a54c6bed6a239d044ae219be9ddee772959d049fb9b03fe4e1fbbba7598ad2ba",
     ),
     ("mac", "x64"): (
         "x86_64-apple-darwin",
-        "d101ac54bc34afff54741406261325dc896b7b646a36a58fff4845ef0a00b2ce",
+        "08310045a2611bad730d7c1a01e847a1ea729d9dcfe29110ca67cbdf3998bb54",
     ),
     ("mac", "arm64"): (
         "aarch64-apple-darwin",
-        "10cab8f6ed6202fdd81637aa6eda4af8d5b7eaa8fc42f9df3c6bea4923de0d93",
+        "ed14e9042f36c0aa18383f5d9729bcbf17847e842666a793b5a5a5d8505c0ca1",
     ),
 }
 # Folder of the core in resources/mihomo, named as Node.js names the platform.
@@ -86,7 +88,7 @@ UNUSED_UNIX_PYTHON = [
     "lib/tk*",
     "lib/itcl*",
     "lib/thread*",
-    "lib/python3.12/lib-dynload/_tkinter*",
+    f"{PYTHON_LIBRARY}/lib-dynload/_tkinter*",
     "bin/2to3*",
     "bin/idle3*",
     "bin/pip*",
@@ -158,7 +160,7 @@ def stage_python(stage: Path, system: str, arch: str) -> Path:
     with tarfile.open(archive) as tar:
         tar.extractall(stage, filter="data")  # Everything is inside python/.
     python = stage / "python"
-    library = python / ("Lib" if system == "win" else "lib/python3.12")
+    library = python / ("Lib" if system == "win" else PYTHON_LIBRARY)
     remove(python, UNUSED_PYTHON[system])
     remove(library, UNUSED_LIBRARY)
     for cache in python.rglob("__pycache__"):

@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-VERSION = "1.19.31"
+VERSION = "1.19.32"
 ROOT = Path(__file__).resolve().parents[1] / "resources" / "mihomo"
 RELEASE = f"https://github.com/MetaCubeX/mihomo/releases/download/v{VERSION}"
 # Archive digests published by GitHub for this release.
@@ -17,32 +17,32 @@ ASSETS = {
     ("linux", "x64"): (
         "linux-amd64-compatible",
         "gz",
-        "04cf9f09671704f839ddbee2e93069dc831a4123a75281e725d1d96ab9ac1afc",
+        "ba3ce607747a07f948fc35780e108a4a7c7f552a38b9bd4d115f313ebcb89c20",
     ),
     ("linux", "arm64"): (
         "linux-arm64",
         "gz",
-        "9e0f11afbf38426b8bd88fdc594678f8161c57eccb4e1b77acb12b493904f1d4",
+        "9dd862e28b46ff7d775f169cceebc28deccaa0a9e804237d421cd2571e0caba0",
     ),
     ("win32", "x64"): (
         "windows-amd64-compatible",
         "zip",
-        "93d14e9a13b49b2f2d256202d02cc8d14a7c4695edf084cae0f941986bc9c218",
+        "974a4d7ad69aed27aa2e8f91d61113573c14dadb14562c63e58effabf59816f0",
     ),
     ("win32", "arm64"): (
         "windows-arm64",
         "zip",
-        "68659624a38ae1dbc4e1b92f45d4dc75da0eaedd4d732b0a6f01a308da945792",
+        "7a4f6e58af9a120920935f2150cf642d945085fdb3e753314505b334234e1d1e",
     ),
     ("darwin", "x64"): (
         "darwin-amd64-compatible",
         "gz",
-        "fb6fca0e105b4310a21eaacd3a8d3853d3d8b87fa4c69737bea52a30a435aac7",
+        "18b382df77bded2ad0fb3db27db5636cb15b20729d5ba995a357eeb9b46bf507",
     ),
     ("darwin", "arm64"): (
         "darwin-arm64",
         "gz",
-        "d131f44b3deb2a8356f7ac75048ad67a10d53243323951c4f3cda7b672922963",
+        "3312a6780652c622890fd4357c6a853bbf865464fd047ac7b7f52dab8de18652",
     ),
 }
 
