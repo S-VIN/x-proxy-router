@@ -31,7 +31,7 @@ Ruff проверяет стиль и ошибки кода, ty — типы.
 
 ## Бинарники Mihomo
 
-Официальные сборки [Mihomo](https://github.com/MetaCubeX/mihomo) **v1.19.31**
+Официальные сборки [Mihomo](https://github.com/MetaCubeX/mihomo) **v1.19.32**
 находятся в [`resources/mihomo`](resources/mihomo), лицензия — в
 [`resources/mihomo/LICENSE`](resources/mihomo/LICENSE).
 
