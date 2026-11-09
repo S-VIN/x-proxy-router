@@ -5,13 +5,8 @@ from dataclasses import replace
 from typing import Any
 
 from ..models.application_context import ApplicationContext
-from ..models.routing_rule import (
-    RoutingAction,
-    RoutingRule,
-    RoutingRuleFieldError,
-    placed,
-    without,
-)
+from ..models.priority import without
+from ..models.routing_rule import RoutingAction, RoutingRule, RoutingRuleFieldError, placed
 from ..models.serialization import JsonValue
 from ..request_error import ErrorCode, RequestError, expect_fields, field_value
 

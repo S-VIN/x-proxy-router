@@ -1,0 +1,29 @@
+{
+	# Leave TCP 443 for REALITY. HTTP 80 obtains/renews the panel certificates.
+	https_port 8443
+	admin off
+}
+
+(panel_tls) {
+	tls {
+		issuer acme {
+			disable_tlsalpn_challenge
+		}
+	}
+}
+
+https://{$XPR_AUTH_DOMAIN}:8443 {
+	import panel_tls
+	reverse_proxy 127.0.0.1:20801
+}
+
+https://{$XPR_PANEL_DOMAIN}:8443 {
+	import panel_tls
+	route {
+		# Applies to every URL, including the WebSocket upgrade at /ws.
+		forward_auth 127.0.0.1:20801 {
+			uri /api/auth/caddy
+		}
+		reverse_proxy 127.0.0.1:20800
+	}
+}

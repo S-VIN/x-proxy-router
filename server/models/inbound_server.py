@@ -1,9 +1,10 @@
 """One listener of the core that accepts local traffic, independent of the core's config format."""
 
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from ipaddress import ip_address
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from .serialization import SECRET
 
@@ -11,6 +12,7 @@ from .serialization import SECRET
 class InboundType(StrEnum):
     # SOCKS5 and HTTP proxy on one port, UDP included.
     PROXY = "proxy"
+    VLESS = "vless"
 
 
 # The port of the inbound created with the database; clients may change or delete it.
@@ -20,6 +22,14 @@ _REQUIRED = object()
 
 # Fields named "<type>_*" belong to that type; values are defaults for the active one.
 _TYPE_DEFAULTS: dict[str, object] = {
+    "vless_listen": "0.0.0.0",
+    "vless_port": 443,
+    "vless_address": _REQUIRED,
+    "vless_server_name": _REQUIRED,
+    "vless_uuid": _REQUIRED,
+    "vless_private_key": _REQUIRED,
+    "vless_public_key": _REQUIRED,
+    "vless_short_id": _REQUIRED,
     "proxy_listen": "127.0.0.1",
     "proxy_port": _REQUIRED,
     "proxy_username": None,
@@ -57,6 +67,19 @@ class InboundServer:
     proxy_username: str | None = None
     proxy_password: str | None = field(default=None, repr=False, metadata=SECRET)
 
+    vless_listen: str | None = None
+    vless_port: int | None = None
+    vless_address: str | None = None
+    vless_server_name: str | None = None
+    vless_uuid: str | None = field(default=None, repr=False, metadata=SECRET)
+    vless_private_key: str | None = field(default=None, repr=False, metadata=SECRET)
+    vless_public_key: str | None = None
+    vless_short_id: str | None = field(default=None, repr=False, metadata=SECRET)
+
+    @property
+    def port(self) -> int | None:
+        return getattr(self, f"{self.type.value}_port")
+
     # Why the core does not listen, set by the server; None while the listener
     # works or the inbound is disabled.
     error: str | None = None
@@ -85,6 +108,8 @@ class InboundServer:
                 object.__setattr__(self, name, default)
         if self.type == InboundType.PROXY:
             self._check_proxy()
+        elif self.type == InboundType.VLESS:
+            self._check_vless()
 
     def _check_proxy(self) -> None:
         try:
@@ -108,3 +133,31 @@ class InboundServer:
                 )
             if not isinstance(password, str) or not password:
                 raise InboundFieldError("Password must be a non-empty string", "proxy_password")
+
+    def _check_vless(self) -> None:
+        # Local import avoids a dependency cycle with the subscription parser.
+        from ..vless import endpoint_host, tls_server_name
+
+        try:
+            object.__setattr__(self, "vless_listen", ip_address(str(self.vless_listen)).compressed)
+        except ValueError:
+            raise InboundFieldError(
+                "Listen address must be an IP address", "vless_listen"
+            ) from None
+        if type(self.vless_port) is not int or not 1 <= self.vless_port <= 65535:
+            raise InboundFieldError("Port must be between 1 and 65535", "vless_port")
+        for name in ("vless_address", "vless_server_name"):
+            try:
+                validate = tls_server_name if name == "vless_server_name" else endpoint_host
+                object.__setattr__(self, name, validate(getattr(self, name)))
+            except ValueError as error:
+                raise InboundFieldError(str(error), name) from None
+        try:
+            UUID(str(self.vless_uuid))
+        except ValueError:
+            raise InboundFieldError("Invalid UUID", "vless_uuid") from None
+        for name in ("vless_private_key", "vless_public_key"):
+            if not re.fullmatch(r"[A-Za-z0-9_-]{43}", getattr(self, name) or ""):
+                raise InboundFieldError("Invalid REALITY key", name)
+        if not re.fullmatch(r"[0-9a-f]{16}", self.vless_short_id or ""):
+            raise InboundFieldError("Invalid REALITY short ID", "vless_short_id")

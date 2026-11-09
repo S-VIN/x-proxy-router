@@ -21,7 +21,7 @@
   icon="inbound"
   {order}
   meta={loading ? undefined : String(inboundServers.list.length)}
-  hint="Ports where apps send their traffic, e.g. a browser with this proxy in its settings. The traffic goes by the routing rules; the rest goes through the connected server and is blocked while none is connected."
+  hint="Ports where apps send their traffic, e.g. a browser with this proxy in its settings. Egress is controlled by the Final outbound block: client routing, two-hop chain, or direct server mode."
 >
   {#if loading}
     <EmptyState compact loading title="Loading…" />

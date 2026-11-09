@@ -1,21 +1,36 @@
 """Client requests that add, change and delete inbounds, and their start with the core."""
 
 import logging
+import secrets
 from dataclasses import replace
 from typing import Any
+from uuid import uuid4
 
 from ..cores.core_client import InboundError
 from ..models.application_context import ApplicationContext
 from ..models.inbound_server import InboundFieldError, InboundServer, InboundType
 from ..models.serialization import JsonValue
 from ..request_error import ErrorCode, RequestError, expect_fields, field_value
+from ..vless import export_vless, generate_reality_keys
 
 log = logging.getLogger(__name__)
 
 MODEL = "inbound_server"
 
 # Fields clients may set; type only when adding, error never.
-_FIELDS = frozenset({"enabled", "proxy_listen", "proxy_port", "proxy_username", "proxy_password"})
+_FIELDS = frozenset(
+    {
+        "enabled",
+        "proxy_listen",
+        "proxy_port",
+        "proxy_username",
+        "proxy_password",
+        "vless_listen",
+        "vless_port",
+        "vless_address",
+        "vless_server_name",
+    }
+)
 
 
 async def start_inbound_servers(context: ApplicationContext) -> None:
@@ -57,7 +72,16 @@ async def add_inbound_server(
         raise RequestError(
             ErrorCode.VALIDATION_ERROR, f"Unknown inbound type {name}", {"field": "type"}
         ) from None
-    inbound = _validated(None, {"type": inbound_type, **_values(payload)})
+    values = _values(payload)
+    if inbound_type == InboundType.VLESS:
+        private, public = await generate_reality_keys()
+        values.update(
+            vless_private_key=private,
+            vless_public_key=public,
+            vless_uuid=str(uuid4()),
+            vless_short_id=secrets.token_hex(8),
+        )
+    inbound = _validated(None, {"type": inbound_type, **values})
     async with context.core_lock:
         _check_port(context, inbound)
         if inbound.enabled:
@@ -125,6 +149,13 @@ def _values(payload: dict[str, JsonValue]) -> dict[str, Any]:
     for name in ("proxy_username", "proxy_password"):
         if name in payload:
             values[name] = None if payload[name] is None else field_value(payload, name, str)
+    for name in ("vless_listen", "vless_address", "vless_server_name", "vless_port"):
+        if name in payload:
+            values[name] = (
+                field_value(payload, name, int)
+                if name == "vless_port"
+                else field_value(payload, name, str)
+            )
     return values
 
 
@@ -140,21 +171,22 @@ def _validated(stored: InboundServer | None, values: dict[str, Any]) -> InboundS
 
 def _check_port(context: ApplicationContext, inbound: InboundServer) -> None:
     """Reject a port of another inbound or of the core's test endpoint, enabled or not."""
-    port = inbound.proxy_port
+    port = inbound.port
+    port_field = f"{inbound.type.value}_port"
     if port is None:
         return
     if port == context.core_client.test_port:
         raise RequestError(
             ErrorCode.CONFLICT,
             f"Port {port} is used by the core for server checks",
-            {"field": "proxy_port"},
+            {"field": port_field},
         )
     for other in context.settings.inbound_server.get_all():
-        if other.id != inbound.id and other.proxy_port == port:
+        if other.id != inbound.id and other.port == port:
             raise RequestError(
                 ErrorCode.CONFLICT,
                 f"Port {port} is used by another inbound",
-                {"field": "proxy_port"},
+                {"field": port_field},
             )
 
 
@@ -164,7 +196,7 @@ async def _start(context: ApplicationContext, inbound: InboundServer) -> None:
         await context.core_client.inbound_set(inbound)
     except InboundError as error:
         # A busy port conflicts with another program; a missing address is a wrong value.
-        code = ErrorCode.CONFLICT if error.field == "proxy_port" else ErrorCode.VALIDATION_ERROR
+        code = ErrorCode.CONFLICT if error.field.endswith("_port") else ErrorCode.VALIDATION_ERROR
         raise RequestError(code, str(error), {"field": error.field}) from None
     except Exception:
         log.exception("Failed to start inbound %s", inbound.id)
@@ -181,3 +213,15 @@ async def _stop(context: ApplicationContext, inbound_id: str) -> None:
         raise RequestError(
             ErrorCode.CORE_ERROR, "The core could not stop the inbound", {"id": inbound_id}
         ) from None
+
+
+async def export_inbound_server(
+    context: ApplicationContext, payload: dict[str, JsonValue]
+) -> dict[str, JsonValue]:
+    expect_fields(payload, {"id"})
+    inbound = context.settings.inbound_server.get_by_id(field_value(payload, "id", str))
+    if inbound is None:
+        raise RequestError(ErrorCode.NOT_FOUND, "Inbound not found")
+    if inbound.type != InboundType.VLESS:
+        raise RequestError(ErrorCode.VALIDATION_ERROR, "Only VLESS inbounds can be exported")
+    return {"uri": export_vless(inbound)}

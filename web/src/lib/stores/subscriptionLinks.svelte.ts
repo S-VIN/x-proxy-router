@@ -17,14 +17,17 @@ export function linkColors(
 }
 
 /**
- * Provider subscription links, added and deleted but never changed. Full URLs are
- * secret: only url_short comes back.
+ * Provider subscription links, added, moved and deleted; a URL never changes. Full
+ * URLs are secret: only url_short comes back. The server renumbers the other links
+ * itself when one is added, moved or deleted.
  */
 export class SubscriptionLinksStore {
   #connection: Connection;
   #collection = new Collection<'subscription_link'>();
-  /** In server order; new links come last. */
+  /** In the order they were added, new links last; labels and colors follow it, so moves keep them. */
   list = $derived(this.#collection.list);
+  /** In priority order, the preferred one first. */
+  byPriority = $derived([...this.list].sort((a, b) => a.priority - b.priority));
   labels = $derived(linkLabels(this.list));
   colors = $derived(linkColors(this.list));
 
@@ -46,6 +49,11 @@ export class SubscriptionLinksStore {
   /** Adds the link and reloads servers of all subscriptions; resolves after that. */
   add(url: string) {
     return this.#connection.request('add/subscription_link', { url });
+  }
+
+  /** Puts the link at the priority; the links in between shift towards its old place. */
+  move(id: string, priority: number) {
+    return this.#connection.request('change/subscription_link', { id, priority });
   }
 
   /** Removes the link; its servers stay until the next refresh. */

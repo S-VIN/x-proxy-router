@@ -103,6 +103,48 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         await startup_finished(self.context)
         self.client.frames.clear()
 
+    async def test_vless_export_final_settings_and_failure_rollback(self):
+        _, response = await self.client.request("add", "inbound_server", {
+            "type": "vless", "vless_port": 14443, "vless_address": "exit.example.com",
+            "vless_server_name": "www.example.com", "enabled": False,
+        })
+        self.assertTrue(response["ok"], response)
+        inbound_id = response["payload"]["id"]
+        stored = self.context.settings.inbound_server.get_by_id(inbound_id)
+        assert stored is not None
+        _, exported = await self.client.request("request", "export_inbound_server", {"id": inbound_id})
+        self.assertTrue(exported["ok"], exported)
+        uri = exported["payload"]["uri"]
+        self.assertNotIn(stored.vless_private_key, uri)
+        updates, response = await self.client.request("change", "server_settings", {
+            "id": 0, "final_outbound_uri": uri, "final_outbound_enabled": True,
+        })
+        self.assertTrue(response["ok"], response)
+        self.assertNotIn(stored.vless_uuid, json.dumps(updates))
+        self.core.egress_set.assert_awaited()
+        before = self.context.settings.server_settings.get()
+        self.core.egress_set.side_effect = RuntimeError("apply failed")
+        error = await self.client.error("change", "server_settings", {"id": 0, "final_outbound_enabled": False})
+        self.assertEqual(error["code"], "core_error")
+        self.assertEqual(self.context.settings.server_settings.get(), before)
+        self.core.egress_set.side_effect = None
+        _, response = await self.client.request("change", "server_settings", {"id": 0, "outbound_mode": "server"})
+        self.assertTrue(response["ok"], response)
+        saved = self.context.settings.server_settings.get()
+        self.assertEqual(saved.outbound_mode, "server")
+        self.assertFalse(saved.final_outbound_enabled)
+        self.assertFalse(saved.auto_connect)
+        self.assertEqual(saved.final_outbound_uri, uri)
+        error = await self.client.error("change", "inbound_server", {"id": inbound_id, "vless_private_key": "bad"})
+        self.assertEqual(error["code"], "bad_request")
+        _, response = await self.client.request("change", "inbound_server", {"id": inbound_id, "vless_address": "other.example.com"})
+        self.assertTrue(response["ok"], response)
+        changed = self.context.settings.inbound_server.get_by_id(inbound_id)
+        assert changed is not None
+        self.assertEqual(changed.vless_private_key, stored.vless_private_key)
+        error = await self.client.error("add", "inbound_server", {"type": "proxy", "proxy_port": 14443})
+        self.assertEqual(error["code"], "conflict")
+
     async def test_subscription_link_lifecycle(self):
         updates, response = await self.client.request("add", "subscription_link", {"url": URL})
         link_id = response["payload"]["id"]
@@ -123,7 +165,8 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         )
         update = updates[0]
         self.assertEqual(
-            update["payload"], [{"id": link_id, "url_short": "https://sub.example.com"}]
+            update["payload"],
+            [{"id": link_id, "priority": 1, "url_short": "https://sub.example.com"}],
         )
         self.assertNotIn("token", json.dumps(update))
         self.assertEqual(self.context.settings.subscription_link.get_all()[0].url, URL)
@@ -152,7 +195,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored.subscription_id, link_id)
 
     async def test_add_keeps_link_when_loading_fails(self):
-        old = SubscriptionLink(url="https://old.example.com/sub")
+        old = SubscriptionLink(url="https://old.example.com/sub", priority=1)
         self.context.settings.subscription_link.save(old)
         self.context.settings.outbound_server.update_servers(servers_of(old))
 
@@ -181,7 +224,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_refresh_started_earlier_cannot_drop_added_servers(self):
-        old = SubscriptionLink(url="https://old.example.com/sub")
+        old = SubscriptionLink(url="https://old.example.com/sub", priority=1)
         self.context.settings.subscription_link.save(old)
         loading, release = asyncio.Event(), asyncio.Event()
 
@@ -219,7 +262,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_refresh_request_reloads_servers_and_records_time(self):
-        link = SubscriptionLink(url=URL)
+        link = SubscriptionLink(url=URL, priority=1)
         self.context.settings.subscription_link.save(link)
         self.load.side_effect = servers_of
         before = datetime.now(UTC)
@@ -260,7 +303,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([update["model"] for update in updates], ["server_settings"])
 
     async def test_refresh_request_failure_keeps_servers_and_time(self):
-        link = SubscriptionLink(url=URL)
+        link = SubscriptionLink(url=URL, priority=1)
         self.context.settings.subscription_link.save(link)
         self.context.settings.outbound_server.update_servers(servers_of(link))
         # Set by the successful startup refresh in asyncSetUp.
@@ -338,7 +381,7 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_test_outbound_servers_conflicts_with_refresh(self):
         await self.check_servers()
-        self.context.settings.subscription_link.save(SubscriptionLink(url=URL))
+        self.context.settings.subscription_link.save(SubscriptionLink(url=URL, priority=1))
         loading, finish = asyncio.Event(), asyncio.Event()
 
         async def load(link):
@@ -490,14 +533,40 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error["code"], "unknown_request")
 
     async def test_subscription_link_errors(self):
-        existing = SubscriptionLink(url=URL)
+        existing = SubscriptionLink(url=URL, priority=1)
         self.context.settings.subscription_link.save(existing)
+        other = "https://other.example.com/sub"
         cases = [
             ("add", {"url": URL}, "conflict", {"field": "url"}),
             ("add", {"url": "ftp://example.com"}, "validation_error", {}),
             ("add", {"url": 1}, "bad_request", {"field": "url"}),
             ("add", {}, "bad_request", {"field": "url"}),
             ("add", {"url": URL, "id": "mine"}, "bad_request", {"field": "id"}),
+            ("add", {"url": other, "priority": 0}, "validation_error", {"field": "priority"}),
+            ("add", {"url": other, "priority": 3}, "validation_error", {"field": "priority"}),
+            ("add", {"url": other, "priority": "1"}, "bad_request", {"field": "priority"}),
+            ("change", {"id": existing.id}, "bad_request", {"field": "priority"}),
+            ("change", {"id": existing.id, "priority": True}, "bad_request", {"field": "priority"}),
+            (
+                "change",
+                {"id": existing.id, "priority": 2},
+                "validation_error",
+                {"field": "priority"},
+            ),
+            (
+                "change",
+                {"id": existing.id, "priority": 0},
+                "validation_error",
+                {"field": "priority"},
+            ),
+            ("change", {"id": "missing", "priority": 1}, "not_found", {"field": "id"}),
+            # A link is deleted and added again instead of being changed.
+            (
+                "change",
+                {"id": existing.id, "priority": 1, "url": other},
+                "bad_request",
+                {"field": "url"},
+            ),
             ("delete", {"id": "missing"}, "not_found", {"field": "id"}),
         ]
         for request_type, payload, code, details in cases:
@@ -508,11 +577,49 @@ class RequestTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.context.settings.subscription_link.get_all(), [existing])
         # Failed requests change nothing, so clients receive no updates.
         self.assertEqual(self.client.frames, [])
-        # A link is deleted and added again instead of being changed.
-        error = await self.client.error(
-            "change", "subscription_link", {"id": existing.id, "url": "https://example.com/new"}
+
+    async def test_subscription_link_priorities(self):
+        def priorities(update: dict) -> dict[str, int]:
+            self.assertEqual(update["model"], "subscription_link")
+            return {item["id"]: item["priority"] for item in update["payload"]}
+
+        # Without a priority a link goes last.
+        ids = []
+        for number, name in enumerate(("one", "two"), 1):
+            updates, response = await self.client.request(
+                "add", "subscription_link", {"url": f"https://{name}.example.com/sub"}
+            )
+            ids.append(response["payload"]["id"])
+            self.assertEqual(priorities(updates[0]), {ids[-1]: number})
+        first, second = ids
+        # With one, the links from it on move down.
+        updates, response = await self.client.request(
+            "add", "subscription_link", {"url": URL, "priority": 1}
         )
-        self.assertEqual(error["code"], "unknown_request")
+        third = response["payload"]["id"]
+        self.assertEqual(priorities(updates[0]), {third: 1, first: 2, second: 3})
+        # A move shifts the links in between toward the old place.
+        updates, response = await self.client.request(
+            "change", "subscription_link", {"id": third, "priority": 3}
+        )
+        self.assertTrue(response["ok"])
+        self.assertEqual(priorities(updates[0]), {first: 1, second: 2, third: 3})
+        updates, response = await self.client.request(
+            "change", "subscription_link", {"id": third, "priority": 3}
+        )
+        self.assertEqual((updates, response["ok"]), ([], True))
+        # Links are listed in insertion order, whatever their priorities.
+        self.assertEqual(
+            [
+                (link.id, link.priority)
+                for link in self.context.settings.subscription_link.get_all()
+            ],
+            [(first, 1), (second, 2), (third, 3)],
+        )
+        # The links after a deleted one move up.
+        updates, response = await self.client.request("delete", "subscription_link", {"id": first})
+        self.assertEqual(priorities(updates[0]), {second: 1, third: 2})
+        self.assertEqual(updates[0]["deleted_ids"], [first])
 
     async def test_server_settings(self):
         updates, response = await self.client.request(

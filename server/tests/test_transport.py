@@ -16,6 +16,7 @@ from server.main import (
     configure_handlers,
     is_loopback,
     origin_allowed,
+    public_origin,
     read_environment,
 )
 from server.models.application_context import ApplicationContext
@@ -23,6 +24,16 @@ from server.tests.support import startup_finished
 
 
 class OriginTests(unittest.TestCase):
+    def test_exact_public_origin_behind_loopback_proxy(self):
+        origin = public_origin({"XPR_PUBLIC_ORIGIN": "https://panel.example.com:8443"})
+        with patch("server.main.WEBSOCKET_ALLOWED_ORIGINS", frozenset({origin})):
+            self.assertTrue(origin_allowed(origin))
+            self.assertFalse(origin_allowed("https://panel.example.com"))
+            self.assertFalse(origin_allowed("https://evil.example.com:8443"))
+        for invalid in ("*", "http://panel.example.com", "https://panel.example.com/", "https://user@panel.example.com"):
+            with self.assertRaises(ValueError):
+                public_origin({"XPR_PUBLIC_ORIGIN": invalid})
+
     def test_only_local_pages_and_non_browsers(self):
         for origin in (
             None,

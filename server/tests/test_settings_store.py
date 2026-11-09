@@ -21,6 +21,7 @@ from server.models.outbound_server import (
     XhttpMode,
 )
 from server.models.outbound_test import OutboundTest, OutboundTestRule
+from server.models.priority import PriorityError
 from server.models.reg_filter import RegFilter
 from server.models.server_settings import ServerSettings
 from server.models.subscription_link import SubscriptionLink
@@ -39,8 +40,8 @@ class SettingsStoreTests(unittest.TestCase):
     def test_create_update_delete_and_restore(self):
         self.assertEqual(self.store.subscription_link.get_all(), [])
         self.assertIsNone(self.store.subscription_link.get_by_id("missing"))
-        first = SubscriptionLink(url="https://example.com/one")
-        second = SubscriptionLink(url="https://example.com/two")
+        first = SubscriptionLink(url="https://example.com/one", priority=1)
+        second = SubscriptionLink(url="https://example.com/two", priority=2)
         self.store.subscription_link.save(first)
         self.store.subscription_link.save(second)
         updated = replace(first, url="https://example.com/updated")
@@ -89,8 +90,8 @@ class SettingsStoreTests(unittest.TestCase):
         }
         for url, short in cases.items():
             with self.subTest(url=url):
-                self.assertEqual(SubscriptionLink(url=url).url_short, short)
-        link = SubscriptionLink(url="https://one.example.com/token")
+                self.assertEqual(SubscriptionLink(url=url, priority=1).url_short, short)
+        link = SubscriptionLink(url="https://one.example.com/token", priority=1)
         self.store.subscription_link.save(link)
         [loaded] = self.store.subscription_link.get_all()
         self.assertEqual(loaded.url_short, "https://one.example.com")
@@ -100,24 +101,25 @@ class SettingsStoreTests(unittest.TestCase):
         moved = replace(link, url="https://two.example.com/token")
         self.assertEqual(moved.url_short, "https://two.example.com")
         with self.assertRaises(TypeError):
-            SubscriptionLink(url=link.url, url_short="x")  # ty: ignore[unknown-argument]
+            SubscriptionLink(url=link.url, priority=1, url_short="x")  # ty: ignore[unknown-argument]
         self.assertNotIn("token", repr(link))
 
     def test_read_returns_snapshot(self):
-        link = SubscriptionLink(url="https://example.com/sub")
+        link = SubscriptionLink(url="https://example.com/sub", priority=1)
         self.store.subscription_link.save(link)
         self.store.subscription_link.get_all().clear()
         self.assertEqual(self.store.subscription_link.get_all(), [link])
 
     def test_getters_read_changes_from_another_connection(self):
-        link = SubscriptionLink(url="https://example.com/sub")
+        link = SubscriptionLink(url="https://example.com/sub", priority=1)
         self.assertEqual(self.store.subscription_link.get_all(), [])
         self.assertIsNone(self.store.subscription_link.get_by_id(link.id))
         connection = sqlite3.connect(self.db_path)
         self.addCleanup(connection.close)
         with connection:
             connection.execute(
-                "INSERT INTO subscription_links (id, url) VALUES (?, ?)", (link.id, link.url)
+                "INSERT INTO subscription_links (id, url, priority) VALUES (?, ?, 1)",
+                (link.id, link.url),
             )
         self.assertEqual(self.store.subscription_link.get_all(), [link])
         self.assertEqual(self.store.subscription_link.get_by_id(link.id), link)
@@ -136,11 +138,14 @@ class SettingsStoreTests(unittest.TestCase):
         self.assertIsNone(self.store.subscription_link.get_by_id(link.id))
 
     def test_duplicate_url_does_not_change_database(self):
-        first = SubscriptionLink(url="https://example.com/one")
-        second = SubscriptionLink(url="https://example.com/two")
+        first = SubscriptionLink(url="https://example.com/one", priority=1)
+        second = SubscriptionLink(url="https://example.com/two", priority=2)
         self.store.subscription_link.save(first)
         self.store.subscription_link.save(second)
-        for duplicate in (SubscriptionLink(url=first.url), replace(second, url=first.url)):
+        for duplicate in (
+            SubscriptionLink(url=first.url, priority=1),
+            replace(second, url=first.url),
+        ):
             with self.subTest(id=duplicate.id), self.assertRaises(sqlite3.IntegrityError):
                 self.store.subscription_link.save(duplicate)
             self.assertEqual(self.store.subscription_link.get_all(), [first, second])
@@ -148,8 +153,66 @@ class SettingsStoreTests(unittest.TestCase):
         with SettingsStore() as restored:
             self.assertEqual(restored.subscription_link.get_all(), [first, second])
 
+    def test_links_are_numbered_by_priority_and_listed_in_insertion_order(self):
+        links = self.store.subscription_link
+        first = SubscriptionLink(url="https://example.com/one", priority=1)
+        second = SubscriptionLink(url="https://example.com/two", priority=1)
+        links.save(first)
+        links.save(second)
+        self.assertEqual(links.get_all(), [replace(first, priority=2), second])
+        third = SubscriptionLink(url="https://example.com/three", priority=4)
+        with self.assertRaises(PriorityError):
+            links.save(third)
+        third = replace(third, priority=3)
+        links.save(third)
+        # A move shifts the links in between toward the old place.
+        links.save(replace(third, priority=1))
+        self.assertEqual(
+            links.get_all(),
+            [replace(first, priority=3), replace(second, priority=2), replace(third, priority=1)],
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            links.save(SubscriptionLink(url=first.url, priority=1))
+        self.assertEqual([link.priority for link in links.get_all()], [3, 2, 1])
+        self.assertTrue(links.delete(third.id))
+        self.store.close()
+        with SettingsStore() as restored:
+            self.assertEqual(
+                restored.subscription_link.get_all(),
+                [replace(first, priority=2), replace(second, priority=1)],
+            )
+
+    def test_links_of_older_databases_are_numbered_in_insertion_order(self):
+        self.store.close()
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute("DROP TABLE subscription_links")
+            connection.execute(
+                "CREATE TABLE subscription_links ("
+                "id TEXT PRIMARY KEY NOT NULL, url TEXT NOT NULL UNIQUE)"
+            )
+            connection.executemany(
+                "INSERT INTO subscription_links (id, url) VALUES (?, ?)",
+                [("b", "https://example.com/b"), ("a", "https://example.com/a")],
+            )
+        connection.close()
+        with SettingsStore() as reopened:
+            links = reopened.subscription_link
+            self.assertEqual(
+                links.get_all(),
+                [
+                    SubscriptionLink(id="b", url="https://example.com/b", priority=1),
+                    SubscriptionLink(id="a", url="https://example.com/a", priority=2),
+                ],
+            )
+            # Priorities are unique as in new databases.
+            with self.assertRaises(sqlite3.IntegrityError):
+                reopened._connection.execute("UPDATE subscription_links SET priority = 1")
+        # Numbered once: reopening changes nothing.
+        with SettingsStore() as reopened:
+            self.assertEqual([link.id for link in reopened.subscription_link.get_all()], ["b", "a"])
+
     def test_failed_writes_leave_database_unchanged(self):
-        link = SubscriptionLink(url="https://example.com/sub")
+        link = SubscriptionLink(url="https://example.com/sub", priority=1)
         self.store.subscription_link.save(link)
         # Force genuine SQLite failures for both insert/update and delete operations.
         self.store._connection.execute("PRAGMA query_only = ON")
@@ -169,7 +232,7 @@ class SettingsStoreTests(unittest.TestCase):
         self.assertIs(another, self.store)
         self.assertIs(another.subscription_link, self.store.subscription_link)
         self.assertIs(another.outbound_server, self.store.outbound_server)
-        link = SubscriptionLink(url="https://example.com/sub")
+        link = SubscriptionLink(url="https://example.com/sub", priority=1)
         another.subscription_link.save(link)
         self.assertEqual(self.store.subscription_link.get_by_id(link.id), link)
 
@@ -206,7 +269,7 @@ class ServerSettingsTests(unittest.TestCase):
         self.assertEqual(settings.subscription_refresh_interval, 86400)
         self.assertIsNone(settings.last_subscription_refresh)
         self.assertIs(settings.auto_connect, False)
-        self.assertEqual(self.rows(), [(0, 86400, None, 0)])
+        self.assertEqual(self.rows(), [(0, 86400, None, 0, "client", 0, None)])
 
     def test_save_replaces_the_row_and_persists_utc(self):
         moscow = timezone(timedelta(hours=3))
@@ -217,7 +280,7 @@ class ServerSettingsTests(unittest.TestCase):
         self.store.server_settings.save(changed)
         changed = replace(changed, subscription_refresh_interval=600, auto_connect=True)
         self.store.server_settings.save(changed)
-        self.assertEqual(self.rows(), [(0, 600, "2026-09-26T12:30:00+00:00", 1)])
+        self.assertEqual(self.rows(), [(0, 600, "2026-09-26T12:30:00+00:00", 1, "client", 0, None)])
         self.store.close()
         with SettingsStore() as reopened:
             loaded = reopened.server_settings.get()
@@ -291,7 +354,7 @@ class ServerSettingsTests(unittest.TestCase):
             self.assertEqual(
                 reopened.server_settings.get(), ServerSettings(subscription_refresh_interval=600)
             )
-        self.assertEqual(self.rows(), [(0, 600, None, 0)])
+        self.assertEqual(self.rows(), [(0, 600, None, 0, "client", 0, None)])
         # Moved once: reopening keeps the ids.
         with SettingsStore() as reopened:
             self.assertEqual(reopened.outbound_test.get_all(), [google, site])

@@ -161,6 +161,8 @@ class InboundServerRequestTests(unittest.IsolatedAsyncioTestCase):
                             "proxy_port": 1080,
                             "proxy_username": "user",
                             "error": None,
+                            "vless_listen": None, "vless_port": None, "vless_address": None,
+                            "vless_server_name": None, "vless_public_key": None,
                         }
                     ],
                     "deleted_ids": [],

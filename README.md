@@ -149,6 +149,19 @@ SOCKS5/HTTP-прокси `127.0.0.1:20808`) и регистрируются со
 | Среда Flatpak, его права и библиотеки пакета pacman | `electron/electron-builder.config.mjs` |
 | Node.js, uv и образы Docker | `.github/workflows/*.yml`, `docker/Dockerfile` |
 
+## VLESS-сервер и цепочка из двух ступеней
+
+В **Inbounds → Add VLESS** создаётся TCP + REALITY + Vision listener с автоматически
+сгенерированными credentials. **Copy connection link** экспортирует `vless://` для
+другого экземпляра. На сервере включите **Server mode · direct Internet exit**;
+на клиенте вставьте ссылку в **Final outbound**, сохраните и включите его.
+Маршрут клиента: выбранная первая ступень → final-сервер → Интернет.
+Первая ступень меняется существующим выбором сервера/auto-connect.
+
+Docker Compose включает Tinyauth и HTTPS: [установка, настройки и ограничения](docker/README.md).
+Гарантии необнаружимости прокси нет. Только трафик, поступивший в inbound, идёт
+по заданному маршруту; системный TUN не включается.
+
 ## Docker
 
 Для сервера приложение запускается в Docker: образ собирает workflow «Docker image» в

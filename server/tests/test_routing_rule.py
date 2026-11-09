@@ -21,7 +21,8 @@ from server.models import (
     pattern_matches,
     serialize,
 )
-from server.models.routing_rule import placed, without
+from server.models.priority import PriorityError, without
+from server.models.routing_rule import placed
 from server.settings_store import SettingsStore
 from server.tests.support import startup_finished
 from server.tests.test_requests import Client
@@ -188,7 +189,7 @@ class RoutingRuleStoreTests(unittest.TestCase):
             self.assertIsNone(store.get_by_id("missing"))
             with self.assertRaises(sqlite3.IntegrityError):
                 store.save(rule(1, "A.com"))
-            with self.assertRaises(RoutingRuleFieldError):
+            with self.assertRaises(PriorityError):
                 store.save(rule(5, "e.com"))
             self.assertEqual(store.get_all(), [a, replace(b, priority=2), moved])
             self.assertTrue(store.delete(a.id))

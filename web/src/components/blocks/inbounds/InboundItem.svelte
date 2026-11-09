@@ -15,6 +15,29 @@
 
   let { inbound, ready }: { inbound: InboundServer; ready: boolean } = $props();
 
+  let exported = $state('');
+  let exporting = $state(false);
+  let copied = $state(false);
+  async function copyLink() {
+    exporting = true;
+    error = null;
+    copied = false;
+    try {
+      const result = await inboundServers.export(inbound.id);
+      exported = result.uri;
+      try {
+        await navigator.clipboard.writeText(exported);
+        copied = true;
+      } catch {
+        /* Manual copy below. */
+      }
+    } catch (reason) {
+      error = failure(reason);
+    } finally {
+      exporting = false;
+    }
+  }
+
   let editing = $state(false);
   let toggling = $state(false);
   let retrying = $state(false);
@@ -127,6 +150,28 @@
     </Notice>
   {/if}
 
+  {#if inbound.type === 'vless' && !editing}
+    <Button size="sm" disabled={!ready || deleting} busy={exporting} onclick={copyLink}
+      >Copy connection link</Button
+    >
+    {#if exported}
+      <label class="small"
+        >Connection link — grants access to this proxy
+        <textarea
+          readonly
+          value={exported}
+          aria-label="VLESS connection link"
+          onclick={(event) => event.currentTarget.select()}></textarea>
+      </label>
+      <p class="small muted" role="status">
+        {copied
+          ? 'Copied. Paste into Final outbound on your client.'
+          : 'Select and copy the link manually.'}
+      </p>
+      <Button size="sm" variant="flat" onclick={() => (exported = '')}>Hide link</Button>
+    {/if}
+  {/if}
+
   {#if editing}
     <InboundForm {inbound} type={inbound.type} {ready} onclose={() => (editing = false)} />
   {/if}
@@ -137,6 +182,12 @@
 </li>
 
 <style>
+  textarea {
+    width: 100%;
+    min-height: 80px;
+    resize: vertical;
+    overflow-wrap: anywhere;
+  }
   .item {
     display: flex;
     flex-direction: column;

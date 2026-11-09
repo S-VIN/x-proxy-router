@@ -61,6 +61,12 @@ Inbound, который не запустился (например, порт з
 `server_settings.last_subscription_refresh`, рассылает `server_settings` и заново
 регистрирует серверы в ядре;
 при ошибке серверы и время остаются прежними.
+Каждая подписка сначала загружается напрямую. Если не вышло, загрузка повторяется
+через основной inbound — первый в списке `inbound_server` (при первом запуске это
+прокси на `127.0.0.1:20808`), с его логином и паролем. Повтора нет, если ни один
+сервер не подключён, если основной inbound выключен или не слушает порт (`error`),
+или если inbound нет. Запрос через inbound идёт по правилам роутинга, как любой его
+трафик. Если не удалась и вторая попытка, обновление завершается её ошибкой.
 `refresh_subscriptions` — долгая задача (раздел «Долгие задачи»): одновременно идёт
 не больше одного обновления, а идущий `test_outbound_servers` при старте обновления
 останавливается. Запуск приложения
@@ -97,7 +103,9 @@ Inbound, который не запустился (например, порт з
 | `handlers/inbound_server.py` | Запросы `add`/`change`/`delete` для `inbound_server` и запуск inbound при старте, `start_inbound_servers` |
 | `models/inbound_server.py` | Модель `InboundServer`, типы `InboundType`, порт inbound по умолчанию `DEFAULT_PROXY_PORT` |
 | `handlers/routing_rule.py` | Запросы `add`/`change`/`delete` для `routing_rule` и передача правил ядру при старте, `apply_routing_rules` |
-| `models/routing_rule.py` | Модель `RoutingRule`, действия `RoutingAction`, перенумерация `placed` и `without` |
+| `models/routing_rule.py` | Модель `RoutingRule`, действия `RoutingAction`, `placed` с ошибкой поля правила |
+| `models/priority.py` | Нумерация коллекций 1..N по `priority` (правила роутинга, ссылки на подписки): `placed`, `without`, `PriorityError` |
+| `handlers/subscription_link.py` | Запросы `add`/`change`/`delete` для `subscription_link` |
 | `models/pattern.py` | Упрощённые шаблоны фильтров и правил роутинга: `pattern_matches` |
 | `handlers/` | Обычные async-функции, которые можно вызывать независимо от расписания |
 
@@ -349,8 +357,9 @@ password: str | None = field(default=None, repr=False, metadata=SECRET)
 
 | type | model | payload | ответ `payload` |
 | --- | --- | --- | --- |
-| `add` | `subscription_link` | `{url}` | `{id}`; ответ приходит после загрузки серверов всех подписок |
-| `delete` | `subscription_link` | `{id}` | `{}` |
+| `add` | `subscription_link` | `{url, priority?}` | `{id}`; ответ приходит после загрузки серверов всех подписок |
+| `change` | `subscription_link` | `{id, priority}` | `{}` после выбора сервера автоподключением |
+| `delete` | `subscription_link` | `{id}` | `{}` после выбора сервера автоподключением |
 | `add` | `reg_filter` | `{reg}` | `{id}` |
 | `delete` | `reg_filter` | `{id}` | `{}` |
 | `add` | `outbound_test` | `{url, rule}` | `{id}` |
@@ -529,6 +538,7 @@ context.websocket.register(
 | Функция | Кто вызывает | Когда |
 | --- | --- | --- |
 | `on_auto_connect_enabled` | `change` / `server_settings` | клиент включил режим |
+| `on_priorities_changed` | `change` и `delete` / `subscription_link` | клиент переместил или удалил ссылку |
 | `on_servers_changed` | `application()`, `refresh_subscriptions`, `delete` / `reg_filter` | серверы заново зарегистрированы в ядре или удалён фильтр |
 | `on_check_run_finished` | конец `test_outbound_servers` | серверы проверены; получает проверенные серверы |
 | `watch_connected_server` | планировщик, каждые `RETRY_INTERVAL` = 15 с | быстрые проверки подключённого сервера |
@@ -540,11 +550,11 @@ context.websocket.register(
    сервер, лимиты ниже не действуют.
 2. **Деградация.** Сервер работает, но `DEGRADED_CHECKS` = 2 быстрые проверки
    подряд оценивают его ниже его сглаженного рейтинга больше чем на
-   `DEGRADED_DROP` = 20. Его заменяет сервер, оценённый выше быстрой оценки
-   не меньше чем на `MARGIN` = 10, если с прошлого переключения прошло
-   `MIN_STAY_DEGRADED` = 15 мин и суточный лимит не исчерпан.
-3. **Улучшение.** После `CONFIRMING_RUNS` = 2 проходов проверки подряд другой сервер
-   оценён выше подключённого не меньше чем на `MARGIN`. Он подключается, если с
+   `DEGRADED_DROP` = 20. Его заменяет сервер, ценность которого выше ценности
+   быстрой проверки не меньше чем на `MARGIN` = 10, если с прошлого переключения
+   прошло `MIN_STAY_DEGRADED` = 15 мин и суточный лимит не исчерпан.
+3. **Улучшение.** После `CONFIRMING_RUNS` = 2 проходов проверки подряд ценность
+   другого сервера выше ценности подключённого не меньше чем на `MARGIN`. Он подключается, если с
    прошлого переключения прошёл `MIN_STAY_IMPROVEMENT` = 1 ч и суточный лимит не
    исчерпан.
 
@@ -566,7 +576,8 @@ context.websocket.register(
 по проходам: `0,5 × новый + 0,5 × прежний`, так что один замер сдвигает её
 наполовину. До первого прохода после запуска берётся сохранённый `rating`.
 Кандидаты — серверы без `filtered`, с `rating` больше 0 по последней проверке и не в
-карантине, по убыванию оценки; при равной оценке — порядок в БД. Перед подключением
+карантине, по убыванию ценности (`_value`); при равной ценности — по приоритету
+подписки, затем порядок в БД. Перед подключением
 кандидат быстро проверяется, пробуется не больше `CANDIDATES_TRIED` = 3. Не прошедший
 проверку или отвергнутый ядром кандидат уходит в карантин на
 `CANDIDATE_QUARANTINE` = 10 мин, но только если подключился другой: если не прошёл
@@ -580,6 +591,25 @@ context.websocket.register(
 прохода проверки и каждые `CHECK_INTERVAL`, пока режим включён. При включении
 режима подключённый вручную сервер остаётся, если никто не оценён выше него хотя бы
 на `MARGIN`; сервер с `BY_PING` заменяется любым.
+
+**Ценность** сервера учитывает приоритет его подписки
+(`SubscriptionLink.priority`), но только среди идеальных серверов. Идеальный сервер
+по последней полной проверке прошёл все тесты и дал скорость не меньше `FULL_SPEED`
+(1 Мбит/с, полный балл рейтинга); быстрая проверка берёт скорость прошлой полной.
+Его ценность — `оценка + LEVEL × (уровень + 1)`, где `LEVEL` = 1000. Уровень — у
+подписки: из N ссылок у `priority` 1 уровень N, у `priority` N — 1, у сервера без
+сохранённой ссылки (ссылку удалили) — 0. Ценность остальных серверов — их оценка.
+Оценка не больше 100, поэтому сначала идут идеальные серверы первой подписки, затем
+второй и так далее, каждая группа по оценке, а за ними все неидеальные по оценке:
+приоритет не ставит сервер с проваленным тестом или медленный выше идеального.
+Пинг снижает оценку, но идеальности не лишает. `MARGIN` сравнивает ценности: внутри
+группы это 10 баллов оценки, сервер из группы выше всегда впереди на `MARGIN`, из
+группы ниже — никогда. Поле `rating` модели от приоритета не зависит.
+
+Ценности зависят от приоритетов, поэтому, когда клиент перемещает или удаляет ссылку,
+`on_priorities_changed` во включённом режиме выбирает сразу и без лимитов, как
+`on_auto_connect_enabled`: подключённый сервер остаётся, если никто не ценнее его хотя
+бы на `MARGIN`. Счётчики быстрых проверок при этом не сбрасываются.
 
 **Список серверов меняется** при обновлении подписок. Состояние
 (`AutoConnectState`, `context.auto_connect`) хранится в памяти по id серверов;
@@ -670,10 +700,13 @@ Inbound — порт, на котором ядро принимает трафи
 `**` — к `*`, IPv6 — к сокращённой форме; свойство `network` даёт подсеть
 IP-шаблона (`None` для доменного и `*`).
 
-`placed(rules, rule)` возвращает правила с `rule` на его `priority`: правило с тем
+Нумерацию ведёт `models/priority.py`, общий с ссылками на подписки:
+`placed(items, item)` возвращает элементы с `item` на его `priority`: элемент с тем
 же `id` переносится, остальные сохраняют порядок и нумеруются заново; `priority`
-дальше, чем на одно за последним, — `RoutingRuleFieldError`. `without(rules, id)` —
-правила без этого и с перенумерацией. Их используют хендлеры и хранилище.
+дальше, чем на одно за последним, — `PriorityError` (`ValueError`).
+`without(items, id)` — элементы без этого и с перенумерацией. `routing_rule.placed`
+делает то же, но с `RoutingRuleFieldError` для поля `priority`; его использует
+хендлер, а хранилище — общие функции.
 
 `handlers/routing_rule.py`:
 
@@ -1074,13 +1107,16 @@ HTTP-проверки, которую проходят outbound-серверы. 
 `rule.accepts(status)` возвращает, подходит ли статус под правило. Нет ответа
 (таймаут, ошибка соединения) — проверка не пройдена при любом правиле.
 
-`SubscriptionLink(url=..., id=...)` — неизменяемая модель. `id` по умолчанию
+`SubscriptionLink(url=..., priority=..., id=...)` — неизменяемая модель. `id` по умолчанию
 генерируется как строковый UUID, URL помечен `SECRET`: исключён из repr и не отправляется клиентам.
+`priority` — целое от 1 (иначе `PriorityError`): порядок подписок для
+автоподключения, 1 — первая. Номера в коллекции 1..N без пропусков, как у правил
+роутинга (`models/priority.py`).
 `url_short` — схема и хост URL без учётных данных, порта, пути и параметров,
 например `https://user:token@Sub.Example.com:8443/token` → `https://sub.example.com`.
 Это поле вычисляется из `url` при каждом создании модели, в том числе при чтении
 из БД и в `dataclasses.replace`; передать его в конструктор нельзя, в БД оно не хранится.
-Клиенты получают `id` и `url_short`.
+Клиенты получают `id`, `priority` и `url_short`.
 
 ### Настройки в SQLite
 
@@ -1092,6 +1128,18 @@ HTTP-проверки, которую проходят outbound-серверы. 
 папке Python (`Path.cwd()`); папка, файл и таблицы создаются при необходимости.
 Доступ к сущности подписки — через `settings.subscription_link`. Классы
 отдельных хранилищ находятся в том же файле `server/settings_store.py`.
+
+`settings.subscription_link` (`SubscriptionLinkStore`) хранит ссылки в таблице
+`subscription_links` (`id`, `url`, `priority`, где `url` и `priority` уникальны).
+`get_all()` — в порядке добавления, не по `priority`: так клиенты получают
+снимок, и цвета и подписи ссылок не меняются при перемещении. `save(link)` добавляет
+или меняет ссылку и ставит её на `link.priority`, остальные сдвигаются, как в
+`placed` (слишком большой `priority` — `PriorityError`, URL другой ссылки —
+`sqlite3.IntegrityError`); `delete(id)` → `bool`, ссылки после удалённой
+поднимаются. Строки меняются на месте, чтобы сохранить порядок добавления; перед
+перенумерацией номера временно становятся отрицательными, чтобы не нарушать
+уникальность. В БД, созданной до появления `priority`, таблица при открытии
+пересобирается в одной транзакции, а ссылки нумеруются в порядке добавления.
 
 `settings.server_settings` (`ServerSettingsStore`) хранит `ServerSettings` в таблице
 `server_settings` ровно с одной строкой. Строка со значениями по умолчанию
@@ -1125,8 +1173,8 @@ from server.models import SubscriptionLink
 from server.settings_store import SettingsStore
 
 with SettingsStore() as settings:
-    link = SubscriptionLink(url="https://example.com/sub")
-    settings.subscription_link.save(link)  # Добавить или обновить по id.
+    link = SubscriptionLink(url="https://example.com/sub", priority=1)
+    settings.subscription_link.save(link)  # Добавить или обновить по id, на место priority.
     links = settings.subscription_link.get_all()
     saved = settings.subscription_link.get_by_id(link.id)  # SubscriptionLink | None
     settings.subscription_link.save(replace(link, url="https://example.com/new-sub"))
@@ -1146,7 +1194,7 @@ with SettingsStore() as settings:
 `routing_rules` (`id`, `priority`, `reg`, `action`, где `priority` и `reg`
 уникальны). `get_all()` — по возрастанию `priority`, `get_by_id(id)`;
 `save(rule)` добавляет или меняет правило и ставит его на `rule.priority`, остальные
-сдвигаются, как в `placed` (слишком большой `priority` — `RoutingRuleFieldError`,
+сдвигаются, как в `placed` (слишком большой `priority` — `PriorityError`,
 `reg` другого правила — `sqlite3.IntegrityError`); `delete(id)` → `bool`, правила
 после удалённого поднимаются. Правил немного, поэтому изменение переписывает все
 строки в одной транзакции и не проходит через временные повторы `priority`.
@@ -1174,7 +1222,7 @@ from server.subscription_loader import load_subscription
 servers = await load_subscription(subscription_url)  # list[OutboundServer]
 ```
 
-`load_subscription()` принимает строковую HTTP(S)-ссылку или прямую `vless://`-ссылку
+`load_subscription(link, proxy=None)` принимает строковую HTTP(S)-ссылку или прямую `vless://`-ссылку
 (получает новый `subscription_id`), либо
 `SubscriptionLink` (используется его `id`). Прямые VLESS-ссылки разбираются без сетевого запроса;
 формат ответа HTTP(S)-подписки определяется автоматически. Ошибки загрузки и разбора превращаются в
@@ -1182,8 +1230,11 @@ servers = await load_subscription(subscription_url)  # list[OutboundServer]
 
 Загрузка HTTP выполняется в потоке через стандартный `urllib`, не блокируя
 асинхронный сервер. Таймаут — 30 секунд, User-Agent — `v2rayN/7.0`.
-Подписки всегда загружаются напрямую: `HTTP(S)_PROXY`, `ALL_PROXY` и другие настройки
-прокси не используются. Ответы в gzip/deflate распаковываются:
+`HTTP(S)_PROXY`, `ALL_PROXY`, `no_proxy` и другие настройки прокси не используются:
+без `proxy` подписка загружается напрямую, а с `proxy` (`InboundServer` типа `proxy`) —
+через этот inbound как через HTTP-прокси. HTTPS идёт через туннель `CONNECT`, сертификат
+провайдера проверяется как обычно. Логин и пароль inbound передаются в
+`Proxy-Authorization` только прокси; inbound на `0.0.0.0` или `::` вызывается через loopback. Ответы в gzip/deflate распаковываются:
 your-durev.com отдаёт gzip даже при `Accept-Encoding: identity`.
 Размер ответа до и после распаковки ограничен 10 МиБ.
 
@@ -1468,3 +1519,13 @@ finally:
 Локальные тесты проверяют SOCKS-handshake, независимость маршрутов, inbound,
 правила роутинга, смену серверов и преобразование VLESS/Shadowsocks/Hysteria 2,
 а также TCP/WS/gRPC/XHTTP. Доступность реальных серверов подписок эти тесты не проверяют.
+
+### Серверный режим и final outbound
+
+`server/vless.py` задаёт профиль VLESS TCP + REALITY + Vision, генерацию ключей
+командой встроенного Mihomo и экспорт/валидацию ссылок. Секреты не попадают в
+model sync; экспорт — отдельный запрос. Миграции БД добавляют поля к старым
+таблицам без сброса настроек. Настройки выхода применяются до старта inbound.
+`CoreClient.egress_set` применяет server mode или цепочку через `dialer-proxy`.
+Тестовая группа независима от final outbound. Инструкция развёртывания и
+проверки авторизации находится в [docker/README.md](../docker/README.md).

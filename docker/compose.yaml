@@ -1,27 +1,58 @@
-# The settings come from .env next to this file (see .env.example):
-#   docker compose pull && docker compose up -d
+# Linux host networking preserves configurable TCP/UDP inbound ports.
 name: x-proxy-router
 
 services:
   x-proxy-router:
-    # Built by the "Docker image" workflow on GitHub (.github/workflows/docker.yml).
     image: ghcr.io/s-vin/x-proxy-router:latest
-    container_name: x-proxy-router
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     restart: unless-stopped
-    # Inbounds added in the web interface listen right on the server, at any
-    # port and with UDP, without publishing ports here.
     network_mode: host
-    # The server checks them and stops with a message when one is missing or invalid.
     environment:
-      XPR_UI_HOST: ${XPR_UI_HOST:-}
-      XPR_UI_PORT: ${XPR_UI_PORT:-}
-      XPR_DATA_DIR: ${XPR_DATA_DIR:?Set XPR_DATA_DIR in .env, the folder for the settings}
-    # The folder of the server at the same path in the container.
+      # Deliberately not configurable: no public unauthenticated panel port.
+      XPR_UI_HOST: 127.0.0.1
+      XPR_UI_PORT: 20800
+      XPR_PUBLIC_ORIGIN: https://${XPR_PANEL_DOMAIN:?Set XPR_PANEL_DOMAIN}:8443
+      XPR_DATA_DIR: /data
     volumes:
-      - ${XPR_DATA_DIR}:${XPR_DATA_DIR}
-    # Mihomo logs every connection.
+      - ${XPR_DATA_DIR:?Set XPR_DATA_DIR}:/data:Z
     logging:
       driver: json-file
       options:
         max-size: 10m
         max-file: "3"
+
+  tinyauth:
+    image: ghcr.io/tinyauthapp/tinyauth:v5
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TINYAUTH_APPURL: https://${XPR_AUTH_DOMAIN:?Set XPR_AUTH_DOMAIN}:8443
+      TINYAUTH_SERVER_ADDRESS: 127.0.0.1
+      TINYAUTH_SERVER_PORT: 20801
+      TINYAUTH_AUTH_USERS: ${TINYAUTH_USERS:?Set TINYAUTH_USERS to a bcrypt user entry}
+      TINYAUTH_AUTH_SECURECOOKIE: "true"
+      TINYAUTH_AUTH_TRUSTEDPROXIES: 127.0.0.1/32
+    volumes:
+      - tinyauth-data:/data
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - x-proxy-router
+      - tinyauth
+    environment:
+      XPR_PANEL_DOMAIN: ${XPR_PANEL_DOMAIN}
+      XPR_AUTH_DOMAIN: ${XPR_AUTH_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro,Z
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  tinyauth-data:
+  caddy-data:
+  caddy-config:

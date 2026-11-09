@@ -25,8 +25,9 @@ from .models.outbound_server import (
     XhttpMode,
 )
 from .models.outbound_test import OutboundTest, OutboundTestRule
+from .models.priority import placed, without
 from .models.reg_filter import RegFilter
-from .models.routing_rule import RoutingAction, RoutingRule, placed, without
+from .models.routing_rule import RoutingAction, RoutingRule
 from .models.server_settings import ServerSettings
 from .models.subscription_link import SubscriptionLink
 
@@ -53,23 +54,32 @@ class ServerSettingsStore:
                 self._connection.execute(
                     "ALTER TABLE server_settings ADD COLUMN auto_connect INTEGER NOT NULL DEFAULT 0"
                 )
+            for name, definition in {
+                "outbound_mode": "TEXT NOT NULL DEFAULT 'client'",
+                "final_outbound_enabled": "INTEGER NOT NULL DEFAULT 0",
+                "final_outbound_uri": "TEXT",
+            }.items():
+                if name not in columns:
+                    self._connection.execute(f"ALTER TABLE server_settings ADD COLUMN {name} {definition}")
             # Dataclass defaults fill a missing row; an existing row is kept.
             self._write(ServerSettings(), "INSERT OR IGNORE")
 
     def get(self) -> ServerSettings:
         row = self._connection.execute(
-            "SELECT subscription_refresh_interval, last_subscription_refresh, auto_connect "
+            "SELECT subscription_refresh_interval, last_subscription_refresh, auto_connect, "
+            "outbound_mode, final_outbound_enabled, final_outbound_uri "
             "FROM server_settings WHERE id = 0"
         ).fetchone()
         if row is None:
             raise LookupError("The server_settings row was deleted outside the application")
-        interval, refreshed, auto_connect = row
+        interval, refreshed, auto_connect, mode, final_enabled, final_uri = row
         return ServerSettings(
             subscription_refresh_interval=interval,
             last_subscription_refresh=(
                 datetime.fromisoformat(refreshed) if refreshed is not None else None
             ),
             auto_connect=bool(auto_connect),
+            outbound_mode=mode, final_outbound_enabled=bool(final_enabled), final_outbound_uri=final_uri,
         )
 
     def save(self, settings: ServerSettings) -> None:
@@ -81,63 +91,106 @@ class ServerSettingsStore:
         refreshed = settings.last_subscription_refresh
         self._connection.execute(
             f"{statement} INTO server_settings "
-            "(id, subscription_refresh_interval, last_subscription_refresh, auto_connect) "
-            "VALUES (?, ?, ?, ?)",
+            "(id, subscription_refresh_interval, last_subscription_refresh, auto_connect, "
+            "outbound_mode, final_outbound_enabled, final_outbound_uri) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 settings.id,
                 settings.subscription_refresh_interval,
                 refreshed.isoformat() if refreshed is not None else None,
                 settings.auto_connect,
+                settings.outbound_mode, settings.final_outbound_enabled, settings.final_outbound_uri,
             ),
         )
 
 
+# A column added to an existing table cannot be UNIQUE, so tables from before
+# priorities are built again (SubscriptionLinkStore.__init__).
+_SUBSCRIPTION_LINK_COLUMNS = (
+    "id TEXT PRIMARY KEY NOT NULL, url TEXT NOT NULL UNIQUE, priority INTEGER NOT NULL UNIQUE"
+)
+
+
 class SubscriptionLinkStore:
-    """Subscription settings sharing the connection owned by SettingsStore."""
+    """Subscription settings sharing the connection owned by SettingsStore.
+
+    Links are numbered 1..N by priority; changes renumber them the way
+    models.priority.placed and without do. Links are listed in insertion order,
+    which priorities do not change.
+    """
 
     def __init__(self, connection: sqlite3.Connection):
         self._connection = connection
+        columns = {
+            row[1] for row in self._connection.execute("PRAGMA table_info(subscription_links)")
+        }
         with self._connection:
-            self._connection.execute(
-                "CREATE TABLE IF NOT EXISTS subscription_links ("
-                "id TEXT PRIMARY KEY NOT NULL, url TEXT NOT NULL UNIQUE)"
-            )
+            if columns and "priority" not in columns:
+                # Links of databases from before priorities are numbered in insertion
+                # order. One transaction: a failed rebuild keeps the old table.
+                self._connection.execute("BEGIN")
+                self._connection.execute(
+                    f"CREATE TABLE numbered_links ({_SUBSCRIPTION_LINK_COLUMNS})"
+                )
+                self._connection.execute(
+                    "INSERT INTO numbered_links (id, url, priority) "
+                    "SELECT id, url, ROW_NUMBER() OVER (ORDER BY rowid) "
+                    "FROM subscription_links ORDER BY rowid"
+                )
+                self._connection.execute("DROP TABLE subscription_links")
+                self._connection.execute("ALTER TABLE numbered_links RENAME TO subscription_links")
+            else:
+                self._connection.execute(
+                    f"CREATE TABLE IF NOT EXISTS subscription_links ({_SUBSCRIPTION_LINK_COLUMNS})"
+                )
+
+    def _read(self, query: str, parameters: tuple[str, ...] = ()) -> list[SubscriptionLink]:
+        return [
+            SubscriptionLink(id=id_, url=url, priority=priority)
+            for id_, url, priority in self._connection.execute(query, parameters)
+        ]
 
     def get_all(self) -> list[SubscriptionLink]:
         """Return a snapshot of all subscription links in insertion order."""
-        return [
-            SubscriptionLink(id=id_, url=url)
-            for id_, url in self._connection.execute(
-                "SELECT id, url FROM subscription_links ORDER BY rowid"
-            )
-        ]
+        return self._read("SELECT id, url, priority FROM subscription_links ORDER BY rowid")
 
     def get_by_id(self, subscription_id: str) -> SubscriptionLink | None:
         """Return the link with this id, or None if it does not exist."""
-        row = self._connection.execute(
-            "SELECT id, url FROM subscription_links WHERE id = ?", (subscription_id,)
-        ).fetchone()
-        return SubscriptionLink(id=row[0], url=row[1]) if row is not None else None
+        links = self._read(
+            "SELECT id, url, priority FROM subscription_links WHERE id = ?", (subscription_id,)
+        )
+        return links[0] if links else None
 
     def save(self, subscription: SubscriptionLink) -> None:
-        """Insert a link or update its URL by id, preserving insertion order.
+        """Insert a link or update it by id, putting it at its priority.
 
-        A URL already used by another id raises sqlite3.IntegrityError.
+        The other links move to keep 1..N. A priority more than one past the last
+        link raises PriorityError, a URL already used by another id
+        sqlite3.IntegrityError; nothing changes then.
         """
         with self._connection:
-            self._connection.execute(
-                "INSERT INTO subscription_links (id, url) VALUES (?, ?) "
-                "ON CONFLICT(id) DO UPDATE SET url = excluded.url",
-                (subscription.id, subscription.url),
-            )
+            self._write_all(placed(self.get_all(), subscription))
 
     def delete(self, subscription_id: str) -> bool:
-        """Delete a link by id; return False if it did not exist."""
+        """Delete a link by id, moving the links after it up; return False if it did not exist."""
         with self._connection:
             cursor = self._connection.execute(
                 "DELETE FROM subscription_links WHERE id = ?", (subscription_id,)
             )
-        return cursor.rowcount > 0
+            if cursor.rowcount == 0:
+                return False
+            self._write_all(without(self.get_all(), subscription_id))
+        return True
+
+    def _write_all(self, links: list[SubscriptionLink]) -> None:
+        # Rows are updated in place to keep insertion order; negative numbers free
+        # the unique priorities first.
+        self._connection.execute("UPDATE subscription_links SET priority = -priority")
+        self._connection.executemany(
+            "INSERT INTO subscription_links (id, url, priority) VALUES (?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET url = excluded.url, priority = excluded.priority",
+            [(link.id, link.url, link.priority) for link in links],
+        )
 
 
 class RegFilterStore:
@@ -239,6 +292,11 @@ class InboundServerStore:
                 "proxy_password TEXT, "
                 "error TEXT)"
             )
+            columns = {row[1] for row in self._connection.execute("PRAGMA table_info(inbound_servers)")}
+            for item in fields(InboundServer):
+                if item.name not in columns:
+                    kind = "INTEGER" if item.name == "vless_port" else "TEXT"
+                    self._connection.execute(f"ALTER TABLE inbound_servers ADD COLUMN {item.name} {kind}")
             if created:
                 self._write(InboundServer(type=InboundType.PROXY, proxy_port=DEFAULT_PROXY_PORT))
 
@@ -302,7 +360,7 @@ class InboundServerStore:
 class RoutingRuleStore:
     """Routing rules numbered 1..N by priority, sharing the connection owned by SettingsStore.
 
-    Changes renumber the rules the way models.routing_rule.placed and without do.
+    Changes renumber the rules the way models.priority.placed and without do.
     """
 
     def __init__(self, connection: sqlite3.Connection):
@@ -336,7 +394,7 @@ class RoutingRuleStore:
         """Insert a rule or update it by id, putting it at its priority.
 
         The other rules move to keep 1..N; a priority more than one past the
-        last rule raises RoutingRuleFieldError, a pattern of another rule
+        last rule raises PriorityError, a pattern of another rule
         sqlite3.IntegrityError.
         """
         with self._connection:

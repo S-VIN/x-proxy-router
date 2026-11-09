@@ -11,6 +11,8 @@ import {
   stackLabel,
 } from './format';
 import {
+  draftErrors,
+  draftSettings,
   freePort,
   inboundAddress,
   inboundDetails,
@@ -350,5 +352,26 @@ describe('routing', () => {
   it('label actions, new ones as is', () => {
     expect(actionInfo('direct').label).toBe('Direct');
     expect(actionInfo('reroute')).toEqual({ label: 'reroute', tone: 'neutral', text: 'reroute' });
+  });
+});
+
+describe('VLESS inbound form', () => {
+  it('requires an export address and camouflage domain and emits only editable settings', () => {
+    const draft = inboundDraft('vless', null, []);
+    expect(draft?.type).toBe('vless');
+    if (!draft || draft.type !== 'vless') throw new Error('Missing VLESS draft');
+    expect(draftErrors(draft, null, [])).toHaveProperty('vless_address');
+    expect(draftErrors(draft, null, [])).toHaveProperty('vless_server_name');
+    draft.vless.address = 'exit.example.com';
+    draft.vless.serverName = 'www.example.com';
+    expect(draftErrors(draft, null, [])).toEqual({});
+    expect(draftSettings(draft, null)).toEqual({
+      vless_listen: '0.0.0.0',
+      vless_port: 443,
+      vless_address: 'exit.example.com',
+      vless_server_name: 'www.example.com',
+    });
+    const occupied = { id: 'other', type: 'proxy', proxy_port: 443 } as InboundServer;
+    expect(draftErrors(draft, null, [occupied])).toHaveProperty('vless_port');
   });
 });

@@ -189,7 +189,7 @@ class ConnectionTests(ConnectionTestCase):
         self.assertEqual(connected.id, self.second.id)
 
     async def test_refresh_keeps_the_connection(self):
-        link = SubscriptionLink(url="https://example.com/sub")
+        link = SubscriptionLink(url="https://example.com/sub", priority=1)
         self.context.settings.subscription_link.save(link)
         self.store.set_connected(self.first.id)
         self.load.return_value = [vless("one"), vless("three")]

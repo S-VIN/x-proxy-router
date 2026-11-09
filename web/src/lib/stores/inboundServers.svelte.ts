@@ -31,6 +31,10 @@ export class InboundServersStore {
     return this.#connection.request('change/inbound_server', { id, ...settings });
   }
 
+  export(id: string) {
+    return this.#connection.request('request/export_inbound_server', { id });
+  }
+
   /** The core stops listening before this resolves. */
   remove(id: string) {
     return this.#connection.request('delete/inbound_server', { id });

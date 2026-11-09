@@ -1,11 +1,12 @@
 import asyncio
 import unittest
 from contextlib import chdir
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 from uuid import UUID
 
 from apscheduler.jobstores.base import JobLookupError
@@ -43,7 +44,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
                 return_value=[],
             )
         )
-        self.link = SubscriptionLink(url="https://example.com/startup")
+        self.link = SubscriptionLink(url="https://example.com/startup", priority=1)
 
     async def test_settings_are_stored_in_the_data_folder(self):
         data = Path.cwd() / "data"
@@ -238,7 +239,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         calls = []
         invoked = asyncio.Event()
         loop = asyncio.get_running_loop()
-        link = SubscriptionLink(url="https://example.com/sub")
+        link = SubscriptionLink(url="https://example.com/sub", priority=1)
 
         async def handler(context: ApplicationContext):
             self.assertIs(asyncio.get_running_loop(), loop)
@@ -285,7 +286,7 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_shutdown_waits_for_handler_before_closing_services(self):
         started, finish, finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
-        link = SubscriptionLink(url="https://example.com/sub")
+        link = SubscriptionLink(url="https://example.com/sub", priority=1)
         manager = application()
         context = await manager.__aenter__()
 
@@ -320,8 +321,8 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         async with application() as context:
             await startup_finished(context)
             self.core.outbound_register.reset_mock()  # Startup registration.
-            first = SubscriptionLink(url="https://example.com/one")
-            second = SubscriptionLink(url="https://example.com/two")
+            first = SubscriptionLink(url="https://example.com/one", priority=1)
+            second = SubscriptionLink(url="https://example.com/two", priority=2)
             context.settings.subscription_link.save(first)
             context.settings.subscription_link.save(second)
             servers = {
@@ -352,6 +353,60 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(SubscriptionError):
                 await refresh_subscriptions(context)
             self.core.outbound_register.assert_not_awaited()
+
+    async def test_failed_subscription_is_loaded_again_through_the_main_inbound(self):
+        async with application() as context:
+            await startup_finished(context)
+            link = SubscriptionLink(url="https://example.com/blocked", priority=1)
+            context.settings.subscription_link.save(link)
+            server = OutboundServer(
+                name="loaded",
+                address="example.com",
+                port=443,
+                subscription_id=link.id,
+                protocol=OutboundProtocol.VLESS,
+                vless_uuid=UUID(int=1),
+            )
+            context.settings.outbound_server.save(server)
+            inbounds = context.settings.inbound_server
+            (main,) = inbounds.get_all()  # Created with the database.
+            other = InboundServer(type=InboundType.PROXY, proxy_port=1081)
+            inbounds.save(other)
+
+            def load(link, proxy=None):
+                if proxy is None:
+                    raise SubscriptionError(link.id)
+                return [server]
+
+            async def failed_attempts():
+                self.load.reset_mock()
+                with self.assertRaises(SubscriptionError):
+                    await refresh_subscriptions(context)
+                return self.load.await_args_list
+
+            self.load.side_effect = load
+            # Nothing is connected, so the inbound leads nowhere.
+            self.assertEqual(await failed_attempts(), [call(link)])
+
+            context.settings.outbound_server.set_connected(server.id)
+            self.load.reset_mock()
+            await refresh_subscriptions(context)
+            self.assertEqual(self.load.await_args_list, [call(link), call(link, main)])
+            connected = replace(server, is_connected=True)
+            self.assertEqual(context.settings.outbound_server.get_all(), [connected])
+
+            # Only the first inbound is tried, and only while it is enabled and listening.
+            inbounds.set_error(main.id, "Port 20808 is already in use")
+            self.assertEqual(await failed_attempts(), [call(link)])
+            inbounds.save(replace(main, enabled=False))
+            self.assertEqual(await failed_attempts(), [call(link)])
+            inbounds.delete(main.id)
+            self.load.side_effect = SubscriptionError(link.id)
+            # The error of the second attempt is raised too.
+            self.assertEqual(await failed_attempts(), [call(link), call(link, other)])
+            inbounds.delete(other.id)
+            self.assertEqual(await failed_attempts(), [call(link)])
+            self.assertEqual(context.settings.outbound_server.get_all(), [connected])
 
     async def test_registration_waits_for_a_running_server_check(self):
         async with application() as context:

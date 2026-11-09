@@ -5,12 +5,13 @@ import os
 import threading
 import unittest
 import zlib
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar
 from unittest.mock import patch
 
-from server.models import OutboundProtocol, SubscriptionLink
+from server.models import InboundServer, InboundType, OutboundProtocol, SubscriptionLink
 from server.subscription_loader import SubscriptionError, load_subscription
 
 URI = (
@@ -23,9 +24,11 @@ LINKS_FILE = Path(__file__).resolve().parents[2] / "subscription_links.txt"
 class _Handler(BaseHTTPRequestHandler):
     routes: ClassVar[dict[str, tuple[dict[str, str], bytes]]] = {}
     user_agent: ClassVar[str | None] = None
+    proxy_authorization: ClassVar[str | None] = None
 
     def do_GET(self):
         type(self).user_agent = self.headers["User-Agent"]
+        type(self).proxy_authorization = self.headers["Proxy-Authorization"]
         headers, body = self.routes[self.path]
         self.send_response(200)
         for name, value in headers.items():
@@ -77,6 +80,8 @@ class LoaderTests(unittest.IsolatedAsyncioTestCase):
             "/html": ({}, b"<html>error</html>"),
             "/big": ({}, b"x" * 64),
             "/bomb": ({"Content-Encoding": "gzip"}, gzip.compress(b"x" * 10_000)),
+            # A proxy gets the whole URL as the path.
+            "http://subscription.invalid/plain": ({}, URI.encode()),
         }
         cls.http = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         threading.Thread(target=cls.http.serve_forever, daemon=True).start()
@@ -90,7 +95,7 @@ class LoaderTests(unittest.IsolatedAsyncioTestCase):
     async def test_plain_and_compressed_bodies(self):
         for path in ("/plain", "/base64", "/json", "/gzip", "/gzip-unlabelled", "/deflate"):
             with self.subTest(path=path):
-                link = SubscriptionLink(url=self.base + path)
+                link = SubscriptionLink(url=self.base + path, priority=1)
                 servers = await load_subscription(link)
                 self.assertEqual(len(servers), 1)
                 self.assertEqual(servers[0].name, "Test")
@@ -109,6 +114,23 @@ class LoaderTests(unittest.IsolatedAsyncioTestCase):
                 os.environ.pop(name, None)
             servers = await load_subscription(self.base + "/plain")
         self.assertEqual(len(servers), 1)
+
+    async def test_download_through_an_inbound(self):
+        # The test server has this route only for requests sent to it as a proxy;
+        # no_proxy does not turn the proxy off.
+        url = "http://subscription.invalid/plain"
+        # A listener on all interfaces is reached through loopback.
+        inbound = InboundServer(
+            type=InboundType.PROXY, proxy_listen="0.0.0.0", proxy_port=self.http.server_port
+        )
+        with patch.dict(os.environ, {"no_proxy": "*", "NO_PROXY": "*"}):
+            servers = await load_subscription(url, inbound)
+        self.assertEqual(len(servers), 1)
+        self.assertIsNone(_Handler.proxy_authorization)
+        inbound = replace(inbound, proxy_username="user", proxy_password="pass:wörd")
+        await load_subscription(url, inbound)
+        credentials = base64.b64encode("user:pass:wörd".encode()).decode()
+        self.assertEqual(_Handler.proxy_authorization, f"Basic {credentials}")
 
     async def test_direct_vless_link_does_not_download(self):
         with patch("server.subscription_loader._download") as download:

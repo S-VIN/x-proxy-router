@@ -5,6 +5,7 @@ import base64
 import json
 import zlib
 from copy import deepcopy
+from ipaddress import ip_address
 from typing import Any
 from urllib.parse import parse_qsl, unquote, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
@@ -12,6 +13,7 @@ from uuid import UUID, uuid4
 
 from .models import (
     GrpcMode,
+    InboundServer,
     OutboundProtocol,
     OutboundSecurity,
     OutboundServer,
@@ -26,8 +28,8 @@ from .models import (
 __all__ = ["SubscriptionError", "load_subscription"]
 
 _MAX_SIZE = 10 * 1024 * 1024
-# Subscriptions are always downloaded directly: HTTP(S)_PROXY and system proxy
-# settings are ignored.
+# HTTP(S)_PROXY and system proxy settings are ignored: subscriptions are downloaded
+# directly or through the inbound the caller gives.
 _OPENER = build_opener(ProxyHandler({}))
 
 
@@ -39,30 +41,37 @@ class SubscriptionError(RuntimeError):
         self.subscription_id = subscription_id
 
 
-async def load_subscription(link: str | SubscriptionLink) -> list[OutboundServer]:
+async def load_subscription(
+    link: str | SubscriptionLink, proxy: InboundServer | None = None
+) -> list[OutboundServer]:
     """Detect HTTP(S) subscriptions or direct VLESS links and return all servers.
 
     Responses can contain plain/Base64 VLESS lists or Xray JSON profiles.
     SubscriptionLink preserves its id; a string gets a new subscription id.
+    With proxy, a proxy inbound, HTTP(S) subscriptions are downloaded through it
+    as an HTTP proxy with its credentials, otherwise directly.
     """
     url = link.url if isinstance(link, SubscriptionLink) else link
     scheme = urlsplit(url).scheme
     if scheme not in ("http", "https", "vless"):
         raise ValueError("Expected an HTTP(S) subscription or VLESS link")
     if scheme in ("http", "https") and isinstance(link, str):
-        link = SubscriptionLink(url=link)
+        # Checks the URL; a link of its own is the only one, so first.
+        link = SubscriptionLink(url=link, priority=1)
     subscription_id = link.id if isinstance(link, SubscriptionLink) else str(uuid4())
     try:
-        body = url if scheme == "vless" else await asyncio.to_thread(_download, url)
+        body = url if scheme == "vless" else await asyncio.to_thread(_download, url, proxy)
         return _parse_subscription(body, subscription_id)
     except Exception:  # noqa: BLE001
         # URLs, response bodies and parser exceptions may contain credentials.
         raise SubscriptionError(subscription_id) from None
 
 
-def _download(url: str) -> str:
+def _download(url: str, proxy: InboundServer | None) -> str:
     # Providers choose the response format by User-Agent.
     request = Request(url, headers={"User-Agent": "v2rayN/7.0", "Accept-Encoding": "gzip, deflate"})
+    if proxy is not None:
+        _set_proxy(request, proxy)
     with _OPENER.open(request, timeout=30) as response:
         body = response.read(_MAX_SIZE + 1)
         encoding = response.headers.get("Content-Encoding", "identity").lower()
@@ -75,6 +84,24 @@ def _download(url: str) -> str:
     if len(body) > _MAX_SIZE:
         raise ValueError("Subscription response is too large")
     return body.decode("utf-8-sig")
+
+
+def _set_proxy(request: Request, inbound: InboundServer) -> None:
+    """Send the request through the inbound as an HTTP proxy, with its credentials if set.
+
+    Set on the request, not by ProxyHandler, which bypasses hosts in no_proxy.
+    HTTPS goes through a CONNECT tunnel, so the certificate is still checked, and
+    urllib sends the credentials only in the CONNECT request.
+    """
+    address = ip_address(str(inbound.proxy_listen))
+    # A listener on all interfaces is reached through loopback.
+    if address.is_unspecified:
+        address = ip_address("::1" if address.version == 6 else "127.0.0.1")
+    host = f"[{address}]" if address.version == 6 else str(address)
+    request.set_proxy(f"{host}:{inbound.proxy_port}", "http")
+    if inbound.proxy_username is not None:
+        credentials = f"{inbound.proxy_username}:{inbound.proxy_password}".encode()
+        request.add_header("Proxy-Authorization", f"Basic {base64.b64encode(credentials).decode()}")
 
 
 def _endpoint(address, port):

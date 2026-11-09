@@ -1,3 +1,4 @@
+import type { RequestPayload } from '../api/protocol';
 import type { Connection } from '../api/connection.svelte';
 import { Collection } from './collection.svelte';
 
@@ -11,6 +12,10 @@ export class ServerSettingsStore {
   constructor(connection: Connection) {
     this.#connection = connection;
     connection.on('server_settings', (message) => this.#collection.apply(message));
+  }
+
+  change(settings: Omit<RequestPayload<'change/server_settings'>, 'id'>) {
+    return this.#connection.request('change/server_settings', { id: 0, ...settings });
   }
 
   /** Restarts the timer: the next automatic refresh is `seconds` from now. */

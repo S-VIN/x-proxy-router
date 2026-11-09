@@ -37,6 +37,7 @@ from .handlers.inbound_server import (
     add_inbound_server,
     change_inbound_server,
     delete_inbound_server,
+    export_inbound_server,
     start_inbound_servers,
 )
 from .handlers.init import init
@@ -60,6 +61,7 @@ from .handlers.routing_rule import (
 from .handlers.server_settings import change_server_settings
 from .handlers.subscription_link import (
     add_subscription_link,
+    change_subscription_link,
     delete_subscription_link,
 )
 from .handlers.subscriptions import schedule_refresh_subscriptions
@@ -122,6 +124,18 @@ def read_environment(environ: Mapping[str, str]) -> tuple[str, int, Path]:
     if errors:
         raise ValueError("\n".join(errors))
     return host, port, Path(directory)
+
+
+def public_origin(environ: Mapping[str, str]) -> str | None:
+    """Exact HTTPS origin behind the authenticated reverse proxy, never a wildcard."""
+    value = environ.get("XPR_PUBLIC_ORIGIN", "").strip()
+    if not value:
+        return None
+    parts = urlsplit(value)
+    if (parts.scheme != "https" or not parts.hostname or parts.username or parts.password
+        or parts.path or parts.query or parts.fragment):
+        raise ValueError("XPR_PUBLIC_ORIGIN must be an HTTPS origin without a trailing slash")
+    return value
 
 
 def stops_with_stdin(environ: Mapping[str, str]) -> bool:
@@ -563,13 +577,16 @@ async def application() -> AsyncIterator[ApplicationContext]:
             # The core's test endpoint takes a free port, but not a port of a stored inbound.
             await core_client.service_start(
                 {
-                    inbound.proxy_port
+                    inbound.port
                     for inbound in settings.inbound_server.get_all()
-                    if inbound.proxy_port is not None
+                    if inbound.port is not None
                 }
             )
             # Before the inbounds, so their traffic follows the rules from the start.
             await apply_routing_rules(context)
+            egress = settings.server_settings.get()
+            if egress.outbound_mode != "client" or egress.final_outbound_enabled:
+                await core_client.egress_set(egress)
             await start_inbound_servers(context)
             await register_outbound_servers(context)
             await on_servers_changed(context)
@@ -613,6 +630,7 @@ def configure_handlers(context: ApplicationContext) -> None:
     )
     websocket = context.websocket
     websocket.register("add", "subscription_link", partial(add_subscription_link, context))
+    websocket.register("change", "subscription_link", partial(change_subscription_link, context))
     websocket.register("delete", "subscription_link", partial(delete_subscription_link, context))
     websocket.register("add", "reg_filter", partial(add_reg_filter, context))
     websocket.register("delete", "reg_filter", partial(delete_reg_filter, context))
@@ -621,6 +639,7 @@ def configure_handlers(context: ApplicationContext) -> None:
     websocket.register("add", "inbound_server", partial(add_inbound_server, context))
     websocket.register("change", "inbound_server", partial(change_inbound_server, context))
     websocket.register("delete", "inbound_server", partial(delete_inbound_server, context))
+    websocket.register("request", "export_inbound_server", partial(export_inbound_server, context))
     websocket.register("add", "routing_rule", partial(add_routing_rule, context))
     websocket.register("change", "routing_rule", partial(change_routing_rule, context))
     websocket.register("delete", "routing_rule", partial(delete_routing_rule, context))
@@ -692,6 +711,9 @@ if __name__ == "__main__":
     )
     try:
         WEBSOCKET_HOST, WEBSOCKET_PORT, DATA_DIR = read_environment(os.environ)
+        origin = public_origin(os.environ)
+        if origin:
+            WEBSOCKET_ALLOWED_ORIGINS = frozenset({origin})
     except ValueError as error:
         sys.exit(str(error))
     asyncio.run(main(stop_on_stdin_close=stops_with_stdin(os.environ)))

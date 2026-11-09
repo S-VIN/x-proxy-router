@@ -62,7 +62,7 @@
   icon="link"
   {order}
   meta={settings ? String(subscriptionLinks.list.length) : undefined}
-  hint="Servers come from these links. Every update reloads servers of all subscriptions. The server keeps links secret and shows only their hosts."
+  hint="Servers come from these links. Every update reloads servers of all subscriptions. The server keeps links secret and shows only their hosts. Auto connect prefers servers of the upper subscriptions, but only those that passed every test at full speed: otherwise the best server wins, whatever its subscription."
 >
   {#snippet actions()}
     {#if interval !== null}
@@ -101,17 +101,18 @@
         No subscriptions yet
       </p>
     {:else}
-      <ul class="list">
-        {#each subscriptionLinks.list as link (link.id)}
+      <ol class="list">
+        {#each subscriptionLinks.byPriority as link (link.id)}
           <SubscriptionItem
             {link}
             label={subscriptionLinks.label(link.id)}
             color={subscriptionLinks.color(link.id)}
             servers={outboundServers.countBySubscription.get(link.id) ?? 0}
+            count={subscriptionLinks.list.length}
             ready={connection.ready}
           />
         {/each}
-      </ul>
+      </ol>
     {/if}
     <AddSubscriptionForm ready={connection.ready} />
   {/if}

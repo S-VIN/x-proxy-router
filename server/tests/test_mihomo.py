@@ -23,6 +23,7 @@ from server.models import (
     RoutingRule,
     ShadowsocksMethod,
 )
+from server.subscription_loader import SubscriptionError, load_subscription
 
 
 def free_port():
@@ -162,6 +163,16 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await listener.wait_closed()
 
     async def echo_vless(self, label):
+        async def echo(reader, writer):
+            while data := await reader.read(1024):
+                writer.write(label + data)
+                await writer.drain()
+
+        return await self.fake_vless(echo)
+
+    async def fake_vless(self, serve):
+        """A local VLESS server; after the header serve(reader, writer) answers, never dialling."""
+
         async def handle(reader, writer):
             self.writers.append(writer)
             try:
@@ -175,9 +186,7 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 await reader.readexactly(size)
                 writer.write(b"\x00\x00")
                 await writer.drain()
-                while data := await reader.read(1024):
-                    writer.write(label + data)
-                    await writer.drain()
+                await serve(reader, writer)
             except (asyncio.IncompleteReadError, ConnectionError):
                 pass
             finally:
@@ -338,6 +347,41 @@ class MihomoIntegrationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(OSError):
             await asyncio.open_connection("127.0.0.1", moved.proxy_port)
         await self.ping(await self.socks(other.proxy_port, (b"user", b"secret")), b"main:")
+
+    async def test_subscription_downloads_through_an_inbound_with_credentials(self):
+        received = []
+
+        async def provider(reader, writer):
+            received.append(await reader.readuntil(b"\r\n\r\n"))
+            body = b"vless://00000000-0000-0000-0000-000000000001@example.com:443#Proxied"
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body))
+            await writer.drain()
+
+        async def tls_provider(reader, writer):
+            received.append(await reader.readexactly(1))
+
+        c = self.client
+        http, https = await self.fake_vless(provider), await self.fake_vless(tls_provider)
+        await c.service_start()
+        listener = inbound(proxy_username="user", proxy_password="pass:word")
+        await c.inbound_set(listener)
+        await c.outbound_register([http, https])
+        await c.outbound_connect(http.id)
+        # Documentation addresses: only the fake servers answer them.
+        url = "http://192.0.2.1/subscription"
+        servers = await load_subscription(url, listener)
+        self.assertEqual([server.name for server in servers], ["Proxied"])
+        # The credentials are for the proxy only.
+        self.assertNotIn(b"proxy-authorization", received[0].lower())
+        with self.assertRaises(SubscriptionError):
+            await load_subscription(url, replace(listener, proxy_password="wrong"))
+        self.assertEqual(len(received), 1)
+        # HTTPS goes through a CONNECT tunnel: the TLS handshake reaches the server,
+        # which does not answer it.
+        await c.outbound_connect(https.id)
+        with self.assertRaises(SubscriptionError):
+            await load_subscription("https://192.0.2.1/subscription", listener)
+        self.assertEqual(received[1:], [b"\x16"])
 
     async def test_inbound_failures_keep_the_previous_listener(self):
         c = self.client

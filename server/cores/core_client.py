@@ -15,6 +15,7 @@ from ..models import InboundServer, InboundType, OutboundServer, RoutingRule
 _RESERVED_IDS = frozenset(
     {
         "main",
+        "final",
         "test",
         "DIRECT",
         "REJECT",
@@ -46,6 +47,9 @@ class InboundError(Exception):
 
 def proxy_address(inbound: InboundServer) -> tuple[str, int]:
     """The listen address and port of a proxy inbound."""
+    if inbound.type == InboundType.VLESS:
+        assert inbound.vless_listen is not None and inbound.vless_port is not None
+        return inbound.vless_listen, inbound.vless_port
     if inbound.type != InboundType.PROXY:
         raise ValueError(f"The core does not support {inbound.type} inbounds")
     assert inbound.proxy_listen is not None and inbound.proxy_port is not None
@@ -84,21 +88,29 @@ class CoreClient(ABC):
         same_port = old is not None and proxy_address(old)[1] == port
         family = socket.AF_INET6 if ip_address(listen).version == 6 else socket.AF_INET
         try:
-            for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+            for kind in (
+                (socket.SOCK_STREAM,)
+                if new.type == InboundType.VLESS
+                else (socket.SOCK_STREAM, socket.SOCK_DGRAM)
+            ):
                 with socket.socket(family, kind) as probe:
                     probe.bind((listen, 0 if same_port else port))
         except OSError as error:
             if error.errno in _ADDRESS_NOT_AVAILABLE:
                 raise InboundError(
-                    f"Address {listen} is not available on this computer", "proxy_listen"
+                    f"Address {listen} is not available on this computer",
+                    f"{new.type.value}_listen",
                 ) from None
             if error.errno in _ADDRESS_IN_USE:
-                raise InboundError(f"Port {port} is already in use", "proxy_port") from None
+                raise InboundError(
+                    f"Port {port} is already in use", f"{new.type.value}_port"
+                ) from None
             if error.errno in _ACCESS_DENIED:
                 raise InboundError(
-                    f"Port {port} needs administrator rights or is reserved", "proxy_port"
+                    f"Port {port} needs administrator rights or is reserved",
+                    f"{new.type.value}_port",
                 ) from None
-            raise InboundError(f"Cannot listen on port {port}", "proxy_port") from None
+            raise InboundError(f"Cannot listen on port {port}", f"{new.type.value}_port") from None
 
     @staticmethod
     async def _check_inbound_listening(inbound: InboundServer) -> None:
@@ -113,6 +125,8 @@ class CoreClient(ABC):
             async with asyncio.timeout(5):
                 reader, writer = await asyncio.open_connection(listen, port)
                 try:
+                    if inbound.type == InboundType.VLESS:
+                        return  # TCP bind check; REALITY needs an authenticated TLS handshake.
                     # SOCKS5 with two methods: no authentication, username and password.
                     writer.write(b"\x05\x02\x00\x02")
                     await writer.drain()
@@ -124,7 +138,9 @@ class CoreClient(ABC):
         except (OSError, TimeoutError, asyncio.IncompleteReadError):
             pass
         if answer[:1] != b"\x05":
-            raise InboundError(f"The core could not listen on port {port}", "proxy_port")
+            raise InboundError(
+                f"The core could not listen on port {port}", f"{inbound.type.value}_port"
+            )
 
     @abstractmethod
     def check_outbound_server_config(self, server: OutboundServer) -> None:
@@ -172,6 +188,10 @@ class CoreClient(ABC):
     async def inbound_delete(self, inbound_id: str) -> None:
         """Stop the inbound's listener; an unknown id is ignored."""
         ...
+
+    async def egress_set(self, settings) -> None:
+        """Apply server/direct mode and the optional final hop."""
+        raise NotImplementedError
 
     @abstractmethod
     async def routing_set(self, rules: list[RoutingRule]) -> None:

@@ -27,7 +27,7 @@ URI = (
 
 
 def _load_servers(body: str, subscription_id: str) -> list[OutboundServer]:
-    link = SubscriptionLink(url="https://example.com/sub", id=subscription_id)
+    link = SubscriptionLink(url="https://example.com/sub", id=subscription_id, priority=1)
     with patch("server.subscription_loader._download", return_value=body):
         return asyncio.run(load_subscription(link))
 

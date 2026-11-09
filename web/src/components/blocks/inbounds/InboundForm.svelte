@@ -13,6 +13,7 @@
   import { inboundServers } from '../../../lib/stores';
   import Button from '../../ui/Button.svelte';
   import Notice from '../../ui/Notice.svelte';
+  import VlessFields from './VlessFields.svelte';
   import ProxyFields from './ProxyFields.svelte';
 
   interface Props {
@@ -90,6 +91,8 @@
       hasPassword={inbound?.proxy_username != null}
       disabled={saving}
     />
+  {:else if draft?.type === 'vless'}
+    <VlessFields bind:draft={draft.vless} errors={shownErrors} disabled={saving} />
   {/if}
 
   {#if error}

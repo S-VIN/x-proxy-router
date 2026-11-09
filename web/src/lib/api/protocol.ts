@@ -29,10 +29,18 @@ export interface ServerSettings {
   last_subscription_refresh: string | null;
   /** The server chooses the connected server itself; a client's choice turns it off. */
   auto_connect: boolean;
+  outbound_mode?: 'client' | 'server';
+  final_outbound_enabled?: boolean;
+  final_outbound_address?: string | null;
 }
 
 export interface SubscriptionLink {
   id: string;
+  /**
+   * 1 is preferred first by auto connect while it has ideal servers; the links
+   * are numbered 1..N without gaps.
+   */
+  priority: number;
   /** Scheme and host only; the full link is secret. */
   url_short: string;
 }
@@ -86,7 +94,7 @@ export interface OutboundServer {
   is_connected: boolean;
 }
 
-export type InboundType = Open<'proxy'>;
+export type InboundType = Open<'proxy' | 'vless'>;
 
 /** Where the core accepts traffic; fields prefixed with a type are null for other types. */
 export interface InboundServer {
@@ -98,6 +106,11 @@ export interface InboundServer {
   /** IP address; 0.0.0.0 or :: accept connections from the network. */
   proxy_listen: string | null;
   proxy_port: number | null;
+  vless_listen?: string | null;
+  vless_port?: number | null;
+  vless_address?: string | null;
+  vless_server_name?: string | null;
+  vless_public_key?: string | null;
   /** null: no authentication. The password is secret and never sent to clients. */
   proxy_username: string | null;
   /** Why the core does not listen; null while it listens or is disabled. */
@@ -107,6 +120,10 @@ export interface InboundServer {
 /** Inbound fields a client sets; username and password are set or removed together. */
 export interface InboundSettings {
   enabled?: boolean;
+  vless_listen?: string;
+  vless_port?: number;
+  vless_address?: string;
+  vless_server_name?: string;
   proxy_listen?: string;
   proxy_port?: number;
   proxy_username?: string | null;
@@ -199,7 +216,8 @@ type Empty = Record<string, never>;
 
 /** Every request the server accepts, keyed by "type/model". */
 export interface Requests {
-  'add/subscription_link': { payload: { url: string }; result: { id: string } };
+  'add/subscription_link': { payload: { url: string; priority?: number }; result: { id: string } };
+  'change/subscription_link': { payload: { id: string; priority: number }; result: Empty };
   'delete/subscription_link': { payload: { id: string }; result: Empty };
   'add/reg_filter': { payload: { reg: string }; result: { id: string } };
   'delete/reg_filter': { payload: { id: string }; result: Empty };
@@ -225,9 +243,13 @@ export interface Requests {
       id: 0;
       subscription_refresh_interval?: number;
       auto_connect?: boolean;
+      outbound_mode?: 'client' | 'server';
+      final_outbound_enabled?: boolean;
+      final_outbound_uri?: string | null;
     };
     result: Empty;
   };
+  'request/export_inbound_server': { payload: { id: string }; result: { uri: string } };
   'request/refresh_subscriptions': { payload: Empty; result: Empty };
   'request/test_outbound_servers': { payload: Empty; result: Empty };
   'request/connect_outbound_server': { payload: { id: string }; result: Empty };

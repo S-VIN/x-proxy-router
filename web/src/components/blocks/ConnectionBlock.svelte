@@ -68,6 +68,12 @@
   {/snippet}
   {#if serverSettings.current === null}
     <EmptyState compact loading title="Loading…" />
+  {:else if serverSettings.current.outbound_mode === 'server'}
+    <EmptyState
+      compact
+      title="Server mode · direct exit"
+      hint="Inbound traffic exits from this server. No first-hop proxy is required."
+    />
   {:else if server === null}
     <EmptyState
       compact

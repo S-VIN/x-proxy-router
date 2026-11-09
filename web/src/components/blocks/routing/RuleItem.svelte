@@ -5,7 +5,7 @@
   import { routingRules } from '../../../lib/stores';
   import Badge from '../../ui/Badge.svelte';
   import Button from '../../ui/Button.svelte';
-  import Icon from '../../ui/Icon.svelte';
+  import MoveArrows from '../../ui/MoveArrows.svelte';
   import Notice from '../../ui/Notice.svelte';
 
   interface Props {
@@ -56,28 +56,14 @@
 <li class="item">
   <div class="line">
     <!-- Rules are checked from the top; the arrows move this one. -->
-    <span class="move">
-      <button
-        type="button"
-        class="arrow"
-        aria-label="Move up: check before the rule above"
-        title="Move up"
-        disabled={!ready || moving || deleting || rule.priority <= 1}
-        onclick={() => move(-1)}
-      >
-        <Icon name="chevron-up" size={12} />
-      </button>
-      <button
-        type="button"
-        class="arrow"
-        aria-label="Move down: check after the rule below"
-        title="Move down"
-        disabled={!ready || moving || deleting || rule.priority >= count}
-        onclick={() => move(1)}
-      >
-        <Icon name="chevron-down" size={12} />
-      </button>
-    </span>
+    <MoveArrows
+      upLabel="Move up: check before the rule above"
+      downLabel="Move down: check after the rule below"
+      first={rule.priority <= 1}
+      last={rule.priority >= count}
+      disabled={!ready || moving || deleting}
+      onmove={move}
+    />
     <span
       class="rule"
       class:shadowed
@@ -114,37 +100,6 @@
     align-items: center;
     gap: var(--space-2);
     min-height: var(--control-height-sm);
-  }
-
-  /* Two small arrows, one above the other, as tall as the row. */
-  .move {
-    display: flex;
-    flex-direction: column;
-    flex-shrink: 0;
-  }
-
-  .arrow {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 18px;
-    height: 13px;
-    padding: 0;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: none;
-    color: var(--color-text-muted);
-    transition: background-color var(--duration-fast) var(--easing);
-  }
-
-  .arrow:not(:disabled):hover {
-    background: var(--color-control-hover);
-    color: var(--color-text);
-  }
-
-  .arrow:disabled {
-    color: var(--color-text-faint);
-    opacity: 0.4;
   }
 
   .rule {

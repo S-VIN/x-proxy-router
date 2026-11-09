@@ -2,11 +2,12 @@
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import StrEnum
 from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network, ip_address, ip_network
 from uuid import uuid4
 
+from . import priority as ordering
 from .pattern import WILDCARD
 
 
@@ -116,30 +117,11 @@ def _network(reg: str) -> IPv4Network | IPv6Network | None:
 
 
 def placed(rules: Sequence[RoutingRule], rule: RoutingRule) -> list[RoutingRule]:
-    """The rules with rule put at its priority, replacing the one with its id.
+    """The rules with rule put at its priority, as models.priority.placed does.
 
-    The others keep their order and are numbered again: those from that
-    priority on move down by one. The priority may be one past the last rule
-    for a new rule; RoutingRuleFieldError if it is further.
+    RoutingRuleFieldError if the priority is more than one past the last rule.
     """
-    others = [other for other in sorted(rules, key=_priority) if other.id != rule.id]
-    if rule.priority > len(others) + 1:
-        raise RoutingRuleFieldError(f"Priority must be between 1 and {len(others) + 1}", "priority")
-    others.insert(rule.priority - 1, rule)
-    return _numbered(others)
-
-
-def without(rules: Sequence[RoutingRule], rule_id: str) -> list[RoutingRule]:
-    """The rules without the one with this id; those after it move up by one."""
-    return _numbered([rule for rule in sorted(rules, key=_priority) if rule.id != rule_id])
-
-
-def _priority(rule: RoutingRule) -> int:
-    return rule.priority
-
-
-def _numbered(rules: list[RoutingRule]) -> list[RoutingRule]:
-    return [
-        rule if rule.priority == number else replace(rule, priority=number)
-        for number, rule in enumerate(rules, 1)
-    ]
+    try:
+        return ordering.placed(rules, rule)
+    except ordering.PriorityError as error:
+        raise RoutingRuleFieldError(str(error), "priority") from None

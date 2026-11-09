@@ -24,6 +24,11 @@
   {#if loading}
     <EmptyState compact loading title="Loading…" />
   {:else}
+    {#if serverSettings.current?.outbound_mode === 'server' || serverSettings.current?.final_outbound_enabled}
+      <p class="muted small">
+        These rules are saved but inactive while server mode or final outbound is enabled.
+      </p>
+    {/if}
     {#if rules.length === 0}
       <p class="muted small" title="All traffic goes through the connected server.">No rules</p>
     {:else}

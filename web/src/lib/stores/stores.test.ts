@@ -41,9 +41,9 @@ describe('applyMessage', () => {
 describe('linkLabels', () => {
   it('uses site names and numbers repeated ones', () => {
     const labels = linkLabels([
-      { id: '1', url_short: 'https://sub.alpha.com' },
-      { id: '2', url_short: 'https://beta.cc' },
-      { id: '3', url_short: 'http://alpha.org' },
+      { id: '1', priority: 1, url_short: 'https://sub.alpha.com' },
+      { id: '2', priority: 2, url_short: 'https://beta.cc' },
+      { id: '3', priority: 3, url_short: 'http://alpha.org' },
     ]);
     expect([...labels.values()]).toEqual(['alpha (1)', 'beta', 'alpha (2)']);
   });
@@ -51,7 +51,11 @@ describe('linkLabels', () => {
 
 describe('linkColors', () => {
   it('colors links in order and repeats colors after the last one', () => {
-    const links = ['a', 'b', 'c'].map((id) => ({ id, url_short: `https://${id}.example` }));
+    const links = ['a', 'b', 'c'].map((id, index) => ({
+      id,
+      priority: index + 1,
+      url_short: `https://${id}.example`,
+    }));
     expect([...linkColors(links, 2).values()]).toEqual([1, 2, 1]);
   });
 });
@@ -254,10 +258,43 @@ describe('stores', () => {
     expect(tasks.testing).toBe(false);
   });
 
+  it('list links by priority but keep their labels and colors when they move', () => {
+    const { connection, deliver } = fakeConnection();
+    const sent: unknown[] = [];
+    connection.request = ((key: string, payload: unknown) => {
+      sent.push([key, payload]);
+      return Promise.resolve({});
+    }) as Connection['request'];
+    const links = new SubscriptionLinksStore(connection);
+    // The snapshot lists links in the order they were added.
+    deliver('subscription_link', [
+      { id: 'a', priority: 2, url_short: 'https://sub.alpha.com' },
+      { id: 'b', priority: 1, url_short: 'https://alpha.org' },
+    ]);
+    expect(links.byPriority.map((link) => link.id)).toEqual(['b', 'a']);
+    const before = [links.label('a'), links.color('a'), links.label('b'), links.color('b')];
+    expect(before).toEqual(['alpha (1)', 1, 'alpha (2)', 2]);
+    // Moving a link renumbers the other in the same message.
+    deliver(
+      'subscription_link',
+      [
+        { id: 'a', priority: 1, url_short: 'https://sub.alpha.com' },
+        { id: 'b', priority: 2, url_short: 'https://alpha.org' },
+      ],
+      false,
+    );
+    expect(links.byPriority.map((link) => link.id)).toEqual(['a', 'b']);
+    expect([links.label('a'), links.color('a'), links.label('b'), links.color('b')]).toEqual(
+      before,
+    );
+    links.move('b', 1);
+    expect(sent).toEqual([['change/subscription_link', { id: 'b', priority: 1 }]]);
+  });
+
   it('label missing subscriptions', () => {
     const { connection, deliver } = fakeConnection();
     const links = new SubscriptionLinksStore(connection);
-    deliver('subscription_link', [{ id: '1', url_short: 'https://sub.provider.com' }]);
+    deliver('subscription_link', [{ id: '1', priority: 1, url_short: 'https://sub.provider.com' }]);
     expect(links.label('1')).toBe('provider');
     expect(links.label('gone')).toBe('Removed subscription');
     expect(links.label(null)).toBe('No subscription');

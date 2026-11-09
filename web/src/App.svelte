@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FinalOutboundBlock from './components/blocks/FinalOutboundBlock.svelte';
   import ConnectionBlock from './components/blocks/ConnectionBlock.svelte';
   import FiltersBlock from './components/blocks/FiltersBlock.svelte';
   import InboundsBlock from './components/blocks/InboundsBlock.svelte';
@@ -31,6 +32,7 @@
     {/snippet}
     {#snippet right()}
       <ConnectionBlock order={1} />
+      <FinalOutboundBlock order={2} />
       <InboundsBlock order={2} />
       <RoutingBlock order={6} />
       <TestsBlock order={7} />

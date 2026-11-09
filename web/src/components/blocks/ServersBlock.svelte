@@ -54,7 +54,7 @@
 
   const subscriptionOptions = $derived.by(() => {
     const options: Option<string>[] = [{ value: ALL, label: 'All subscriptions' }];
-    for (const link of subscriptionLinks.list) {
+    for (const link of subscriptionLinks.byPriority) {
       options.push({ value: link.id, label: subscriptionLinks.label(link.id) });
     }
     if (outboundServers.list.some((server) => !knownSubscription(server))) {
@@ -169,7 +169,7 @@
       shortLabel="Auto"
       checked={autoConnectPending ?? autoConnect}
       busy={autoConnectPending !== null}
-      disabled={!connection.ready || loading}
+      disabled={!connection.ready || loading || serverSettings.current?.outbound_mode === 'server'}
       title={autoConnectPending === true
         ? 'Checking servers to choose one…'
         : autoConnect

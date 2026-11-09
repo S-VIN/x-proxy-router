@@ -595,7 +595,9 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
             await finish.wait()
             return []
 
-        self.context.settings.subscription_link.save(SubscriptionLink(url="https://example.com/s"))
+        self.context.settings.subscription_link.save(
+            SubscriptionLink(url="https://example.com/s", priority=1)
+        )
         self.enterContext(patch("server.handlers.subscriptions.load_subscription", load))
         refresh = asyncio.create_task(refresh_subscriptions(self.context))
         await loading.wait()

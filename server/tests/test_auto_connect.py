@@ -27,7 +27,9 @@ from server.handlers.auto_connect import (
     watch_connected_server,
 )
 from server.handlers.core import connect_outbound_server
+from server.handlers.outbound_test import FULL_SPEED
 from server.handlers.server_settings import change_server_settings
+from server.handlers.subscription_link import change_subscription_link, delete_subscription_link
 from server.handlers.subscriptions import refresh_subscriptions
 from server.main import application
 from server.models import (
@@ -44,6 +46,8 @@ from server.tests.support import startup_finished
 from server.tests.test_connection import ConnectionTestCase, vless
 from server.tests.test_model_sync import Client
 
+# Bytes per second of a full check that downloaded at full speed.
+FULL = int(FULL_SPEED)
 # Outcome of a quick check: passes with the stored rating (True) or this rating,
 # fails (False), or the check itself raises.
 Outcome = bool | int | Exception
@@ -401,10 +405,121 @@ class ImprovementTests(AutoConnectTestCase):
         self.assertFalse(self.context.settings.server_settings.get().auto_connect)
 
 
+class PriorityTests(AutoConnectTestCase):
+    """Links one (priority 1) and two (priority 2) with servers a1, a2 and b1, b2."""
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.one = SubscriptionLink(url="https://one.example.com/sub", priority=1)
+        self.two = SubscriptionLink(url="https://two.example.com/sub", priority=2)
+        self.context.settings.subscription_link.save(self.one)
+        self.context.settings.subscription_link.save(self.two)
+        # The servers of the second link are stored first: the order does not decide.
+        self.b1, self.b2, self.a1, self.a2 = (
+            replace(vless(name), subscription_id=link.id)
+            for name, link in (
+                ("b1", self.two),
+                ("b2", self.two),
+                ("a1", self.one),
+                ("a2", self.one),
+            )
+        )
+        self.store.add_servers([self.b1, self.b2, self.a1, self.a2])
+
+    def checked(
+        self, server: OutboundServer, rating: int, *, passed: bool = True, speed: int = FULL
+    ) -> None:
+        """Store a full check; ideal unless a test failed or the speed is below full."""
+        self.store.update_health(
+            server.id,
+            ping=None,
+            speed=speed,
+            rating=rating,
+            tests={"t": True, "u": passed},
+            filtered=None,
+        )
+
+    async def test_ideal_servers_come_first_by_priority(self):
+        self.checked(self.a1, 75)
+        self.checked(self.b1, 100)
+        # A server without a link comes after the servers of the stored links.
+        self.checked(self.first, 100)
+        self.checked(self.a2, 99, passed=False)
+        self.checked(self.b2, 99, speed=FULL - 1)
+        for server in (self.a1, self.b1, self.first):
+            self.quick[server.id] = False
+        await self.enable()
+        self.assertEqual(self.quick_checked, [self.a1.id, self.b1.id, self.first.id])
+        self.assertIsNone(self.connected_id())
+        self.quick.clear()
+        await self.tick(CHECK_INTERVAL)
+        self.assertEqual(self.connected_id(), self.a1.id)
+
+    async def test_without_ideal_servers_the_score_decides(self):
+        self.checked(self.a1, 80, speed=FULL - 1)
+        self.checked(self.b1, 90, passed=False)
+        self.checked(self.a2, 90, passed=False)
+        self.quick = dict.fromkeys((self.a1.id, self.b1.id, self.a2.id), False)
+        await self.enable()
+        # Equal values go by priority: a2 before b1, which is stored first.
+        self.assertEqual(self.quick_checked, [self.a2.id, self.b1.id, self.a1.id])
+
+    async def test_moved_or_deleted_links_change_the_choice_at_once(self):
+        self.checked(self.a1, 80)
+        self.checked(self.b1, 100)
+        await self.enable()
+        self.assertEqual(self.connected_id(), self.a1.id)
+        await change_subscription_link(self.context, {"id": self.two.id, "priority": 1})
+        self.assertEqual(self.connected_id(), self.b1.id)
+        # Like turning the mode on: no limits, nobody is quarantined.
+        self.assertEqual((self.state.switches, self.state.quarantine), ([], {}))
+        self.set_auto_connect(False)
+        await change_subscription_link(self.context, {"id": self.one.id, "priority": 1})
+        self.assertEqual(self.connected_id(), self.b1.id)
+        self.set_auto_connect(True)
+        self.forget_calls()
+        await change_subscription_link(self.context, {"id": self.two.id, "priority": 1})
+        self.assertEqual(self.quick_checked, [])
+        # The servers of a deleted link stay, after the servers of the stored links.
+        await delete_subscription_link(self.context, {"id": self.two.id})
+        self.assertEqual(self.connected_id(), self.a1.id)
+
+    async def test_server_of_a_higher_link_replaces_after_two_runs(self):
+        self.checked(self.a1, 95, passed=False)
+        self.checked(self.b1, 80)
+        await self.enable()
+        self.assertEqual(self.connected_id(), self.b1.id)
+        self.now += MIN_STAY_IMPROVEMENT
+        self.checked(self.a1, 75)
+        await self.run_finished()
+        self.assertEqual(self.connected_id(), self.b1.id)
+        await self.run_finished()
+        self.assertEqual(self.connected_id(), self.a1.id)
+        # An ideal server of a lower link never replaces it, whatever its score.
+        self.checked(self.b1, 100)
+        for _ in range(3):
+            self.now += MIN_STAY_IMPROVEMENT
+            await self.run_finished()
+        self.assertEqual(self.connected_id(), self.a1.id)
+
+    async def test_degraded_ideal_server_gives_way_within_its_link(self):
+        self.checked(self.a1, 95)
+        self.checked(self.a2, 95 - DEGRADED_DROP - 1 + MARGIN)
+        self.checked(self.b1, 100)
+        await self.enable()
+        self.assertEqual(self.connected_id(), self.a1.id)
+        self.now += MIN_STAY_DEGRADED
+        # Rated lower for ping, but still ideal.
+        self.quick[self.a1.id] = 95 - DEGRADED_DROP - 1
+        await self.tick(CHECK_INTERVAL)
+        await self.tick(CHECK_INTERVAL)
+        self.assertEqual(self.connected_id(), self.a2.id)
+
+
 class ServerListTests(AutoConnectTestCase):
     async def asyncSetUp(self):
         await super().asyncSetUp()
-        link = SubscriptionLink(url="https://example.com/sub")
+        link = SubscriptionLink(url="https://example.com/sub", priority=1)
         self.context.settings.subscription_link.save(link)
 
     def stored(self, name: str) -> OutboundServer:

@@ -3,6 +3,7 @@
 The whole algorithm is here; other modules only report events to it:
 
 - on_auto_connect_enabled: a client turned the mode on;
+- on_priorities_changed: a client moved or deleted a subscription link;
 - on_servers_changed: servers were registered in the core again (startup,
   subscription refresh), or a filter was deleted;
 - on_check_run_finished: test_outbound_servers checked the servers;
@@ -14,28 +15,44 @@ Three reasons to replace the connected server, from urgent to optional:
    full check filters the server by ping. Any working server replaces it at
    once, whatever the limits below.
 2. Degradation. The server works, but DEGRADED_CHECKS quick checks in a row
-   rate it DEGRADED_DROP points below its score. A server scored MARGIN above
-   the quick rating replaces it, if the last switch was MIN_STAY_DEGRADED ago
-   and DAILY_SWITCHES are not used up.
-3. Improvement. Another server is scored MARGIN above the connected one after
+   rate it DEGRADED_DROP points below its score. A server valued MARGIN above
+   the quick check's value replaces it, if the last switch was MIN_STAY_DEGRADED
+   ago and DAILY_SWITCHES are not used up.
+3. Improvement. Another server is valued MARGIN above the connected one after
    CONFIRMING_RUNS check runs in a row. It replaces the connected one, if the
    last switch was MIN_STAY_IMPROVEMENT ago and DAILY_SWITCHES are not used up.
 
 A quick check is a check without the speed test (quick_test_outbound): it fails
 if a TCP server does not answer the ping, or fewer than half of the tests pass.
 Scores are ratings of full checks smoothed over check runs, so one measurement
-moves a score by half. Only servers that are not filtered, rated above 0 by
-their last check and not in quarantine are chosen, best score first. A server
-is checked quickly right before it is connected: one that fails is skipped and
-quarantined for CANDIDATE_QUARANTINE. If all tried servers fail, the router's
-own connection is taken to be down: nothing changes and nobody is quarantined.
-A server left for failing or degrading is quarantined for QUARANTINE, doubled
-for each such time within a day, up to MAX_QUARANTINE, so the choice does not
-swing between two servers.
+moves a score by half. Servers are compared by value (_value):
+
+- An ideal server, one that passed every test and downloaded at FULL_SPEED by
+  its last check (a quick check keeps the last speed), is valued
+  score + LEVEL * (level + 1). The level is its subscription's: of N links,
+  N for priority 1 down to 1 for priority N, and 0 without a stored link.
+- Any other server is valued its score.
+
+A score is at most 100, so ideal servers of the first subscription come first,
+then those of the second and so on, each by score, and all other servers after
+them, by score: a priority never puts a server that failed a test or downloaded
+slowly before one that did not. Ping costs points, but does not make a server
+less than ideal. Equal values go by priority, then in stored order.
+
+Only servers that are not filtered, rated above 0 by their last check and not
+in quarantine are chosen, best value first. A server is checked quickly right
+before it is connected: one that fails is skipped and quarantined for
+CANDIDATE_QUARANTINE. If all tried servers fail, the router's own connection is
+taken to be down: nothing changes and nobody is quarantined. A server left for
+failing or degrading is quarantined for QUARANTINE, doubled for each such time
+within a day, up to MAX_QUARANTINE, so the choice does not swing between two
+servers.
 
 When nothing is connected, the best server is connected without limits: at
 startup, when a refresh removed the connected server, when the mode is turned
-on, and every CHECK_INTERVAL while the mode is on.
+on, and every CHECK_INTERVAL while the mode is on. When the mode is turned on
+and when subscription priorities change, a server valued MARGIN above the
+connected one replaces it at once, also without limits.
 
 State lives in memory (ApplicationContext.auto_connect), keyed by server id,
 and is lost on restart. Subscription refreshes change the servers, so every
@@ -46,7 +63,7 @@ at the moment of the switch.
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from time import monotonic
@@ -55,7 +72,7 @@ from ..models.application_context import ApplicationContext
 from ..models.outbound_server import OutboundServer
 from ..models.outbound_test import OutboundTest, OutboundTestRule
 from .core import CoreError, switch_connected_server
-from .outbound_test import quick_test_outbound
+from .outbound_test import FULL_SPEED, quick_test_outbound
 
 log = logging.getLogger(__name__)
 
@@ -68,8 +85,11 @@ FAILED_CHECKS = 3
 # Quick checks in a row rated DEGRADED_DROP points below the score that make it degraded.
 DEGRADED_CHECKS = 2
 DEGRADED_DROP = 20
-# Points a server must be ahead to replace a working one.
+# Value points a server must be ahead to replace a working one.
 MARGIN = 10
+# Value points per subscription level of an ideal server; above any score, so
+# levels come before scores.
+LEVEL = 1000
 # Check runs in a row a server must be MARGIN ahead to replace a working one.
 CONFIRMING_RUNS = 2
 # Weight of the newest full check in a score.
@@ -102,6 +122,7 @@ class Reason(StrEnum):
 
     NOTHING_CONNECTED = "nothing was connected"
     ENABLED = "auto connect was turned on"
+    PRIORITIES = "subscription priorities changed"
     FAILURE = "the connected server failed"
     DEGRADATION = "the connected server degraded"
     IMPROVEMENT = "a better server was found"
@@ -125,7 +146,7 @@ class AutoConnectState:
     quarantine: dict[str, float] = field(default_factory=dict)
     # Server id -> times it was left for failing or degrading.
     strikes: dict[str, list[float]] = field(default_factory=dict)
-    # Server id -> check runs in a row that scored it MARGIN above the connected one.
+    # Server id -> check runs in a row that valued it MARGIN above the connected one.
     better_runs: dict[str, int] = field(default_factory=dict)
     # Times of switches counted towards DAILY_SWITCHES.
     switches: list[float] = field(default_factory=list)
@@ -140,11 +161,9 @@ class AutoConnectState:
 
 
 async def on_auto_connect_enabled(context: ApplicationContext) -> None:
-    """A client turned the mode on: choose a server now.
+    """A client turned the mode on: choose a server now (_choose).
 
-    With nothing connected, the best server is connected. A connected server
-    filtered by ping is replaced by any; another one stays unless a server is
-    scored MARGIN above it. Quick checks and check runs are counted anew.
+    Quick checks are counted anew.
     """
     state = context.auto_connect
     async with state.lock:
@@ -152,14 +171,20 @@ async def on_auto_connect_enabled(context: ApplicationContext) -> None:
             return
         connected = context.settings.outbound_server.get_connected()
         _watch(state, connected.id if connected is not None else None, monotonic())
-        state.better_runs.clear()
-        if connected is None:
-            await _connect_best(context, None, Reason.NOTHING_CONNECTED)
-        elif connected.filtered is not None:
-            await _connect_best(context, connected, Reason.FAILURE)
-        else:
-            above = _score(state, connected) + MARGIN
-            await _connect_best(context, connected, Reason.ENABLED, above=above)
+        await _choose(context, connected, Reason.ENABLED)
+
+
+async def on_priorities_changed(context: ApplicationContext) -> None:
+    """A client moved or deleted a subscription link: with the mode on, choose a server now.
+
+    Values depend on the priorities; see _choose.
+    """
+    state = context.auto_connect
+    async with state.lock:
+        if not _enabled(context):
+            return
+        connected = context.settings.outbound_server.get_connected()
+        await _choose(context, connected, Reason.PRIORITIES)
 
 
 async def on_servers_changed(context: ApplicationContext) -> None:
@@ -189,7 +214,7 @@ async def on_check_run_finished(
 
     Their scores take in the new ratings, whether the mode is on or not. With
     the mode on: nothing connected, the best server is connected; the connected
-    server filtered by ping is replaced (failure). Otherwise every server scored
+    server filtered by ping is replaced (failure). Otherwise every server valued
     MARGIN above the connected one counts one more run in a row, and the best
     of those with CONFIRMING_RUNS replaces it (improvement), within the limits.
     """
@@ -209,9 +234,12 @@ async def on_check_run_finished(
             await _connect_best(context, connected, Reason.FAILURE)
             return
         now = monotonic()
-        above = _score(state, connected) + MARGIN
+        levels = _levels(context)
+        above = _value(state, connected, levels) + MARGIN
         ahead = [
-            server for server in _candidates(state, servers, now) if _score(state, server) >= above
+            server
+            for server in _candidates(state, servers, levels, now)
+            if _value(state, server, levels) >= above
         ]
         state.better_runs = {server.id: state.better_runs.get(server.id, 0) + 1 for server in ahead}
         confirmed = [server for server in ahead if state.better_runs[server.id] >= CONFIRMING_RUNS]
@@ -265,9 +293,29 @@ async def watch_connected_server(context: ApplicationContext) -> None:
         else:
             state.degradations = 0
         if state.degradations >= DEGRADED_CHECKS and _may_switch(state, now, MIN_STAY_DEGRADED):
-            above = rating + MARGIN
+            above = _value(state, result, _levels(context), rating) + MARGIN
             if not await _connect_best(context, connected, Reason.DEGRADATION, above=above):
                 state.degradations = 0  # Counted anew before the next try.
+
+
+async def _choose(
+    context: ApplicationContext, connected: OutboundServer | None, reason: Reason
+) -> None:
+    """Choose a server at once, without limits; check runs are counted anew.
+
+    With nothing connected, the best server is connected. A connected server
+    filtered by ping is replaced by any; another one stays unless a server is
+    valued MARGIN above it.
+    """
+    state = context.auto_connect
+    state.better_runs.clear()
+    if connected is None:
+        await _connect_best(context, None, Reason.NOTHING_CONNECTED)
+    elif connected.filtered is not None:
+        await _connect_best(context, connected, Reason.FAILURE)
+    else:
+        above = _value(state, connected, _levels(context)) + MARGIN
+        await _connect_best(context, connected, reason, above=above)
 
 
 async def _connect_best(
@@ -277,13 +325,14 @@ async def _connect_best(
     *,
     above: float = 0,
 ) -> bool:
-    """Connect the best server scored at least `above` instead of current; see _switch."""
+    """Connect the best server valued at least `above` instead of current; see _switch."""
     state = context.auto_connect
     servers = context.settings.outbound_server.get_all()
+    levels = _levels(context)
     candidates = [
         server
-        for server in _candidates(state, servers, monotonic())
-        if _score(state, server) >= above
+        for server in _candidates(state, servers, levels, monotonic())
+        if _value(state, server, levels) >= above
     ]
     return await _switch(context, current, candidates, reason)
 
@@ -369,12 +418,15 @@ def _passed(result: OutboundServer) -> bool:
 
 
 def _candidates(
-    state: AutoConnectState, servers: Sequence[OutboundServer], now: float
+    state: AutoConnectState,
+    servers: Sequence[OutboundServer],
+    levels: Mapping[str | None, int],
+    now: float,
 ) -> list[OutboundServer]:
-    """Servers that may replace the connected one, best score first.
+    """Servers that may replace the connected one, best value first.
 
     Not connected, not filtered, rated above 0 by the last check, not in
-    quarantine. Servers with equal scores keep their stored order.
+    quarantine. Equal values go by priority, then in stored order.
     """
     allowed = [
         server
@@ -384,12 +436,48 @@ def _candidates(
         and (server.rating or 0) > 0
         and state.quarantine.get(server.id, 0) <= now
     ]
-    return sorted(allowed, key=lambda server: _score(state, server), reverse=True)
+    return sorted(
+        allowed,
+        key=lambda server: (_value(state, server, levels), levels.get(server.subscription_id, 0)),
+        reverse=True,
+    )
 
 
 def _score(state: AutoConnectState, server: OutboundServer) -> float:
     """Smoothed rating; the stored rating until a check run is seen; 0 if unchecked."""
     return state.scores.get(server.id, server.rating or 0)
+
+
+def _value(
+    state: AutoConnectState,
+    server: OutboundServer,
+    levels: Mapping[str | None, int],
+    score: float | None = None,
+) -> float:
+    """The server's score, plus LEVEL * (level + 1) if it is ideal; see the module docstring.
+
+    score replaces the server's own, e.g. with a quick check's rating.
+    """
+    if score is None:
+        score = _score(state, server)
+    if not _ideal(server):
+        return score
+    return score + LEVEL * (levels.get(server.subscription_id, 0) + 1)
+
+
+def _ideal(server: OutboundServer) -> bool:
+    """By its last check the server passed every test and downloaded at full speed."""
+    return (
+        server.tests is not None
+        and all(server.tests.values())
+        and (server.speed or 0) >= FULL_SPEED
+    )
+
+
+def _levels(context: ApplicationContext) -> dict[str | None, int]:
+    """Subscription link id -> level: of N links, N for priority 1 to 1 for priority N."""
+    links = context.settings.subscription_link.get_all()
+    return {link.id: len(links) + 1 - link.priority for link in links}
 
 
 def _record(state: AutoConnectState, server: OutboundServer) -> None:

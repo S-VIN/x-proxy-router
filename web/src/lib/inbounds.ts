@@ -10,6 +10,12 @@ export interface InboundTypeInfo {
 /** Types a new inbound can have, each with its own Add button, in this order. */
 export const INBOUND_TYPES: readonly InboundTypeInfo[] = [
   {
+    type: 'vless',
+    label: 'VLESS',
+    description:
+      'Encrypted VLESS TCP + REALITY + Vision server. Export a link to another instance.',
+  },
+  {
     type: 'proxy',
     label: 'Proxy',
     description:
@@ -26,8 +32,9 @@ export function inboundTypeLabel(type: InboundType): string {
 
 /** "127.0.0.1:20808" or "[::]:1080"; null for types without an address. */
 export function inboundAddress(inbound: InboundServer): string | null {
-  const { proxy_listen: listen, proxy_port: port } = inbound;
-  if (listen === null || port === null) return null;
+  const listen = inbound.type === 'vless' ? inbound.vless_listen : inbound.proxy_listen;
+  const port = inbound.type === 'vless' ? inbound.vless_port : inbound.proxy_port;
+  if (listen == null || port == null) return null;
   return `${listen.includes(':') ? `[${listen}]` : listen}:${port}`;
 }
 
@@ -36,6 +43,7 @@ const ANY_ADDRESS = new Set(['0.0.0.0', '::']);
 
 /** "Proxy · this computer · no login". */
 export function inboundDetails(inbound: InboundServer): string {
+  if (inbound.type === 'vless') return `VLESS · REALITY · Vision · ${inbound.vless_address}`;
   const parts = [inboundTypeLabel(inbound.type)];
   const listen = inbound.proxy_listen;
   if (listen !== null) {
@@ -74,7 +82,7 @@ export interface ProxyDraft {
 
 /** The first port from 1080 up that no inbound uses. */
 export function freePort(inbounds: readonly InboundServer[]): number {
-  const used = new Set(inbounds.map((inbound) => inbound.proxy_port));
+  const used = new Set(inbounds.map((inbound) => inbound.proxy_port ?? inbound.vless_port));
   let port = 1080;
   while (used.has(port)) port += 1;
   return port;
@@ -119,7 +127,11 @@ export function proxyErrors(
   const port = parsePort(draft.port);
   if (port === null) {
     errors.proxy_port = 'Enter a port from 1 to 65535.';
-  } else if (inbounds.some((other) => other.id !== inbound?.id && other.proxy_port === port)) {
+  } else if (
+    inbounds.some(
+      (other) => other.id !== inbound?.id && (other.proxy_port ?? other.vless_port) === port,
+    )
+  ) {
     errors.proxy_port = 'Another inbound uses this port.';
   }
   if (draft.auth) {
@@ -161,10 +173,18 @@ export function proxyOpen(draft: ProxyDraft): boolean {
  * Form values of one inbound type. A new type adds a member here, cases to the
  * functions below, its fields component to InboundForm and itself to INBOUND_TYPES.
  */
-export type InboundDraft = { type: 'proxy'; proxy: ProxyDraft };
+export interface VlessDraft {
+  listen: string;
+  port: string;
+  address: string;
+  serverName: string;
+}
+export type InboundDraft =
+  { type: 'proxy'; proxy: ProxyDraft } | { type: 'vless'; vless: VlessDraft };
 
 /** Model fields each type's form shows, so the server's errors find their place. */
 const DRAFT_FIELDS: Record<InboundDraft['type'], readonly string[]> = {
+  vless: ['vless_listen', 'vless_port', 'vless_address', 'vless_server_name'],
   proxy: ['proxy_listen', 'proxy_port', 'proxy_username', 'proxy_password'],
 };
 
@@ -174,6 +194,16 @@ export function inboundDraft(
   inbound: InboundServer | null,
   inbounds: readonly InboundServer[],
 ): InboundDraft | null {
+  if (type === 'vless')
+    return {
+      type: 'vless',
+      vless: {
+        listen: inbound?.vless_listen ?? '0.0.0.0',
+        port: String(inbound?.vless_port ?? 443),
+        address: inbound?.vless_address ?? '',
+        serverName: inbound?.vless_server_name ?? '',
+      },
+    };
   if (type === 'proxy') return { type: 'proxy', proxy: proxyDraft(inbound, inbounds) };
   return null;
 }
@@ -184,6 +214,22 @@ export function draftErrors(
   inbounds: readonly InboundServer[],
 ): FieldErrors {
   switch (draft.type) {
+    case 'vless': {
+      const errors: FieldErrors = {};
+      const v = draft.vless;
+      if (!isIpAddress(v.listen.trim())) errors.vless_listen = 'Enter an IP address.';
+      const port = parsePort(v.port);
+      if (port === null) errors.vless_port = 'Enter a port from 1 to 65535.';
+      else if (
+        inbounds.some(
+          (other) => other.id !== inbound?.id && (other.proxy_port ?? other.vless_port) === port,
+        )
+      )
+        errors.vless_port = 'Another inbound uses this port.';
+      if (!v.address.trim()) errors.vless_address = 'Enter the public IP or domain of this server.';
+      if (!v.serverName.trim()) errors.vless_server_name = 'Enter a TLS camouflage domain.';
+      return errors;
+    }
     case 'proxy':
       return proxyErrors(draft.proxy, inbound, inbounds);
   }
@@ -193,6 +239,13 @@ export function draftSettings(draft: InboundDraft, inbound: InboundServer | null
   switch (draft.type) {
     case 'proxy':
       return proxySettings(draft.proxy, inbound);
+    case 'vless':
+      return {
+        vless_listen: draft.vless.listen.trim(),
+        vless_port: Number(draft.vless.port),
+        vless_address: draft.vless.address.trim(),
+        vless_server_name: draft.vless.serverName.trim(),
+      };
   }
 }
 

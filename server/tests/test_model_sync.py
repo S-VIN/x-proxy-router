@@ -135,8 +135,10 @@ class SerializationTests(unittest.TestCase):
         data = serialize(server)
         assert isinstance(data, dict)
         self.assertIs(type(data["shadowsocks_uot_version"]), int)
-        link = SubscriptionLink(url="https://example.com/token", id="link")
-        self.assertEqual(serialize(link), {"id": "link", "url_short": "https://example.com"})
+        link = SubscriptionLink(url="https://example.com/token", id="link", priority=1)
+        self.assertEqual(
+            serialize(link), {"id": "link", "priority": 1, "url_short": "https://example.com"}
+        )
 
     def test_server_settings_datetime_in_utc(self):
         settings = ServerSettings(
@@ -149,6 +151,9 @@ class SerializationTests(unittest.TestCase):
                 "id": 0,
                 "subscription_refresh_interval": 60,
                 "last_subscription_refresh": "2026-09-26T12:00:00Z",
+                "outbound_mode": "client",
+                "final_outbound_enabled": False,
+                "final_outbound_address": None,
                 "auto_connect": False,
             },
         )
@@ -310,7 +315,9 @@ class ApplicationSyncTests(unittest.IsolatedAsyncioTestCase):
 
         load.side_effect = loaded
         async with asyncio.timeout(2), application() as context:
-            context.settings.subscription_link.save(SubscriptionLink(url="https://e.com/s", id="s"))
+            context.settings.subscription_link.save(
+                SubscriptionLink(url="https://e.com/s", id="s", priority=1)
+            )
             (inbound,) = context.settings.inbound_server.get_all()
             client = Client(context.websocket)
             snapshots = await client.messages()
@@ -318,7 +325,11 @@ class ApplicationSyncTests(unittest.IsolatedAsyncioTestCase):
                 [(m["model"], m["refresh"], m["payload"]) for m in snapshots],
                 [
                     ("server_settings", True, [serialize(ServerSettings())]),
-                    ("subscription_link", True, [{"id": "s", "url_short": "https://e.com"}]),
+                    (
+                        "subscription_link",
+                        True,
+                        [{"id": "s", "priority": 1, "url_short": "https://e.com"}],
+                    ),
                     ("reg_filter", True, []),
                     ("outbound_test", True, []),
                     ("outbound_server", True, []),

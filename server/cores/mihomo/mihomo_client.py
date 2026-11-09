@@ -6,7 +6,10 @@ from collections.abc import Collection
 from contextlib import ExitStack
 
 from ...models import CoreState, InboundServer, OutboundServer, RoutingAction, RoutingRule
+from ...models.inbound_server import InboundType
 from ...models.pattern import WILDCARD
+from ...models.server_settings import ServerSettings
+from ...vless import parse_final_outbound
 from ..core_client import CoreClient, proxy_address
 from .mihomo_process_manager import MihomoError, MihomoProcessManager
 from .mihomo_rest_client import MihomoRestClient
@@ -25,6 +28,22 @@ _FREE_PORT_ATTEMPTS = 20
 def inbound_config(inbound: InboundServer) -> dict:
     """A Mihomo listener for the inbound, named by its id; ValueError for unsupported types."""
     listen, port = proxy_address(inbound)
+    if inbound.type == InboundType.VLESS:
+        return {
+            "name": inbound.id,
+            "type": "vless",
+            "listen": listen,
+            "port": port,
+            "users": [
+                {"username": "client", "uuid": inbound.vless_uuid, "flow": "xtls-rprx-vision"}
+            ],
+            "reality-config": {
+                "dest": f"{inbound.vless_server_name}:443",
+                "server-names": [inbound.vless_server_name],
+                "private-key": inbound.vless_private_key,
+                "short-id": [inbound.vless_short_id],
+            },
+        }
     config: dict = {
         "name": inbound.id,
         "type": "mixed",
@@ -83,6 +102,7 @@ class MihomoClient(CoreClient):
         self._inbounds: dict[str, InboundServer] = {}
         self._rules: list[RoutingRule] = []
         self._selected = {"main": _BLOCKED, "test": _BLOCKED}
+        self._egress = ServerSettings()
         self._lock = asyncio.Lock()
 
     def check_outbound_server_config(self, server: OutboundServer) -> None:
@@ -118,6 +138,7 @@ class MihomoClient(CoreClient):
             self._servers = []
             self._inbounds = {}
             self._rules = []
+            self._egress = ServerSettings()
             self._selected = {"main": _BLOCKED, "test": _BLOCKED}
 
     async def outbound_register(self, servers: list[OutboundServer]) -> None:
@@ -172,6 +193,17 @@ class MihomoClient(CoreClient):
             await self._apply(inbounds=inbounds)
             self._inbounds = inbounds
 
+    async def egress_set(self, settings: ServerSettings) -> None:
+        self._require_started()
+        async with self._lock:
+            previous = self._egress
+            self._egress = settings
+            try:
+                await self._apply()
+            except BaseException:
+                self._egress = previous
+                raise
+
     async def routing_set(self, rules: list[RoutingRule]) -> None:
         self._require_started()
         rules = sorted(rules, key=lambda rule: rule.priority)
@@ -218,6 +250,11 @@ class MihomoClient(CoreClient):
         """
         config = self.process_manager._generate_config()
         config["proxies"] = [outbound_config(server, server.id) for server in servers]
+        if self._egress.final_outbound_enabled:
+            assert self._egress.final_outbound_uri is not None
+            final = outbound_config(parse_final_outbound(self._egress.final_outbound_uri), "final")
+            final["dialer-proxy"] = "main"
+            config["proxies"].append(final)
         choices = [_BLOCKED, *(server.id for server in servers)]
         config["proxy-groups"] = [
             {
@@ -240,12 +277,19 @@ class MihomoClient(CoreClient):
             },
             *(inbound_config(inbound) for inbound in inbounds.values()),
         ]
-        config["rules"] = [
-            "IN-NAME,test,test",
-            *(routing_rule_config(rule) for rule in rules),
-            *(f"IN-NAME,{inbound_id},main" for inbound_id in inbounds),
-            f"MATCH,{_BLOCKED}",
-        ]
+        # Test traffic measures the first hop independently. Server mode and chain
+        # mode override user DIRECT rules, so neither can accidentally bypass its exit.
+        if self._egress.outbound_mode == "server":
+            traffic_rules = ["MATCH,DIRECT"]
+        elif self._egress.final_outbound_enabled:
+            traffic_rules = ["MATCH,final"]
+        else:
+            traffic_rules = [
+                *(routing_rule_config(rule) for rule in rules),
+                *(f"IN-NAME,{inbound_id},main" for inbound_id in inbounds),
+                f"MATCH,{_BLOCKED}",
+            ]
+        config["rules"] = ["IN-NAME,test,test", *traffic_rules]
         return config
 
     def _require_started(self) -> None:
